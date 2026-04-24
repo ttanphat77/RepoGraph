@@ -1,0 +1,148 @@
+# GraphRAG POC: File Localization cho SWE-bench
+
+Một Proof of Concept (POC) triển khai công nghệ Knowledge Graph ứng dụng cho bài toán **File Localization** (Dự đoán files cần sửa dựa trên issue text) thông qua bộ dữ liệu `SWE-bench Lite`. Hệ thống trích xuất cấu trúc mã nguồn (AST parsing) từ GitHub, xây dựng đồ thị tại lớp Semantic kết hợp Structural, và hiển thị trên Streamlit UI.
+
+Mục tiêu giai đoạn POC này là **xây dựng và kiểm chứng Neo4j Graph Schema** trước khi ứng dụng RAG Retrieval & LLM Evaluation.
+
+---
+
+## Tính năng
+
+- **Dual Graph Schema:** Hỗ trợ 2 schema đồ thị, chuyển đổi bằng 1 dòng config — không cần sửa code pipeline.
+- **AST Parsing nâng cao:** Trích xuất cấu trúc code với `tree-sitter`, phân giải cross-file references (call, inheritance) không tạo false-positive edge.
+- **Idempotency:** Dataset caching, git clone và Neo4j batch-ingestion đều chạy lại được mà không nhân bản dữ liệu.
+- **Single Commit Isolation:** Graph đồng bộ tại `base_commit` cố định, dễ đối chiếu với GT Files (Ground-Truth patch files).
+- **Trực quan Graph:** Tích hợp File List (highlight GT files với `🎯`) và đồ thị tương tác `pyvis` trên Streamlit.
+
+---
+
+## Graph Schema
+
+Chọn schema bằng cách đặt `ACTIVE_SCHEMA` trong `config.py`:
+
+### `"simple"` (mặc định)
+
+| Loại | Tên |
+|------|-----|
+| Nodes | `Module`, `Class`, `Function` |
+| Edges | `Defines`, `Calls`, `Imports`, `Inherits` |
+
+Phù hợp để phân tích cấu trúc file-level và luồng gọi hàm.
+
+### `"detailed"`
+
+| Loại | Tên |
+|------|-----|
+| Nodes | `MODULE`, `CLASS`, `METHOD`, `FUNCTION`, `FIELD`, `GLOBAL_VARIABLE` |
+| Edges | `CONTAINS`, `INHERITS`, `HAS_METHOD`, `HAS_FIELD`, `USES` |
+
+Phân biệt method (trong class) vs function (module-level), track class attributes và global variables.
+
+### Thêm schema mới
+
+1. Tạo `pipeline/schemas/my_schema.py` implement `SchemaPlugin`
+2. Đăng ký 1 entry trong `pipeline/schemas/__init__.py`
+3. Đặt `ACTIVE_SCHEMA = "my_schema"` trong `config.py`
+
+---
+
+## Kiến trúc thư mục
+
+```
+graphrag-poc/
+│
+├── config.py                    ← Config tổng (ACTIVE_SCHEMA, Neo4j, parsing limits)
+├── docker-compose.yml           ← Spin up Neo4j Community
+│
+├── scripts/
+│   └── build_graph.py           ← CLI entrypoint (swe-lite | local)
+│
+├── pipeline/
+│   ├── ast_engine.py            ← Engine: tree-sitter, scope building, cross-file resolution
+│   ├── neo4j_ingester.py        ← Batch MERGE/MATCH writes to Neo4j
+│   ├── repo_manager.py          ← Git clone, file discovery
+│   ├── dataset_loader.py        ← SWE-bench dataset loading & caching
+│   └── schemas/
+│       ├── __init__.py          ← load_schema("simple" | "detailed")
+│       ├── base.py              ← SchemaPlugin ABC + ParseContext
+│       ├── simple.py            ← Schema "simple"
+│       └── detailed.py          ← Schema "detailed"
+│
+├── app/                         ← Streamlit UI
+│   ├── main.py
+│   ├── neo4j_client.py          ← Read-only graph queries
+│   └── components/
+│       ├── file_view.py
+│       └── graph_view.py
+│
+├── cache/                       ← JSON instance state & dataset cache
+└── repos/                       ← Cloned repo snapshots
+```
+
+---
+
+## Cài đặt và chạy
+
+### 1. Chuẩn bị môi trường
+
+Yêu cầu: Python 3.11+, Git, Docker.
+
+**Windows:**
+```bash
+python -m venv .venv
+.venv\Scripts\activate        # CMD
+# hoặc
+.venv\Scripts\Activate.ps1    # PowerShell
+
+pip install -r requirements.txt
+```
+
+**macOS / Linux:**
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 2. Khởi động Neo4j
+
+```bash
+docker-compose up -d neo4j
+```
+
+Giao diện query tại `http://localhost:7474` — credentials xem trong `config.py`.
+
+### 3. Build Knowledge Graph
+
+```bash
+# Từ SWE-bench Lite (instance đầu tiên)
+python scripts/build_graph.py swe-lite 1
+
+# Từ một folder cục bộ
+python scripts/build_graph.py local "duong/dan/thu/muc"
+```
+
+Pipeline chạy 4 stage:
+1. **Parallel AST Extraction** — parse tất cả `.py` files song song
+2. **Cross-File Resolution** — phân giải call/inheritance refs thành edges
+3. **Community Detection** — Louvain clustering *(tắt mặc định, bật bằng `ENABLE_COMMUNITY_DETECTION = True`)*
+4. **Bulk Ingestion** — MERGE nodes, MATCH endpoints trước khi tạo edges
+
+### 4. Bật Streamlit Dashboard
+
+```bash
+streamlit run app/main.py
+```
+
+Truy cập `http://localhost:8501`. Tab **Graph View** có option "Depth" để duyệt dependency levels.
+
+---
+
+## Cấu hình chính (`config.py`)
+
+| Tham số | Mặc định | Mô tả |
+|---------|----------|-------|
+| `ACTIVE_SCHEMA` | `"simple"` | Schema đồ thị: `"simple"` hoặc `"detailed"` |
+| `MAX_FILES_PARSED` | `0` | Giới hạn số file parse (0 = không giới hạn) |
+| `ENABLE_COMMUNITY_DETECTION` | `False` | Bật/tắt Louvain clustering (chậm trên repo lớn) |
+| `NEO4J_BATCH_SIZE` | `500` | Số node/edge mỗi batch write |
