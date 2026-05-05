@@ -88,35 +88,41 @@ def build_graph_from_repo(repo_path: str, base_commit: str = "local"):
 
     # ── STAGE 3: Community Detection ──────────────────────────────────────────
     if config.ENABLE_COMMUNITY_DETECTION:
-        logging.info("Stage 3: Community Detection (Louvain)...")
+        logging.info("Stage 3: Community Detection (Leiden)...")
         try:
-            import networkx as nx
-            from networkx.algorithms.community import louvain_communities
+            import igraph as ig
+            import leidenalg
 
-            G = nx.Graph()
             node_map = {}
-
             for res in all_results:
                 for node in res["nodes"]:
-                    G.add_node(node["id"])
                     node_map[node["id"]] = node
+
+            node_ids = list(node_map.keys())
+            node_index = {nid: i for i, nid in enumerate(node_ids)}
 
             all_edges_flat = [e for res in all_results for e in res["definite_edges"]]
             all_edges_flat.extend(semantic_edges)
 
+            edges = []
+            weights = []
             for e in all_edges_flat:
-                if e["source"] in node_map and e["target"] in node_map and e["source"] != e["target"]:
-                    G.add_edge(e["source"], e["target"])
+                if e["source"] in node_index and e["target"] in node_index and e["source"] != e["target"]:
+                    edges.append((node_index[e["source"]], node_index[e["target"]]))
+                    weights.append(config.COMMUNITY_EDGE_WEIGHTS.get(e["type"], 1.0))
 
-            communities = louvain_communities(G, seed=42)
-            logging.info(f"Found {len(communities)} communities.")
-            for cid, members in enumerate(communities):
-                for nid in members:
-                    if nid in node_map:
-                        node_map[nid]["properties"]["community"] = cid
+            G = ig.Graph(n=len(node_ids), edges=edges)
+            partition = leidenalg.find_partition(
+                G, leidenalg.RBConfigurationVertexPartition, weights=weights, seed=42
+            )
+
+            logging.info(f"Found {len(partition)} communities.")
+            for cid, members in enumerate(partition):
+                for idx in members:
+                    node_map[node_ids[idx]]["properties"]["community"] = cid
 
         except ImportError:
-            logging.warning("networkx not installed — skipping community detection.")
+            logging.warning("leidenalg/igraph not installed — skipping community detection.")
     else:
         logging.info("Stage 3: Community Detection skipped (ENABLE_COMMUNITY_DETECTION=False).")
 

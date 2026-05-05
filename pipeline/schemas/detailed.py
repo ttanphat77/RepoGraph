@@ -90,6 +90,9 @@ class DetailedSchema(SchemaPlugin):
             })
             ctx.emit_edge("CONTAINS", ctx.module_id, vid)
 
+    def on_import(self, target_module_id: str, ctx: ParseContext) -> None:
+        ctx.emit_edge("IMPORTS", ctx.module_id, target_module_id)
+
     def on_call(self, node: Node, ctx: ParseContext) -> None:
         pass  # call_refs are collected by the engine; USES edges created in resolve_cross_file
 
