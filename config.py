@@ -19,8 +19,22 @@ ACTIVE_SCHEMA = "simple"
 # Stop ingesting after this many files per repo (0 = unlimited)
 MAX_FILES_PARSED = 0
 
-# Set False to skip Louvain community detection (slow on large repos)
+# Set False to skip Leiden community detection (slow on large repos)
 ENABLE_COMMUNITY_DETECTION = True
+
+# Edge weights for community detection — higher = stronger community bond
+COMMUNITY_EDGE_WEIGHTS: dict[str, float] = {
+    "INHERITS":   3.0,
+    "Inherits":   3.0,
+    "USES":       2.0,
+    "Calls":      2.0,
+    "IMPORTS":    1.5,
+    "Imports":    1.5,
+    "HAS_METHOD": 1.0,
+    "Defines":    1.0,
+    "CONTAINS":   0.5,
+    "HAS_FIELD":  0.3,
+}
 
 # ── Neo4j ─────────────────────────────────────────────────────────────────────
 NEO4J_URI = "bolt://localhost:7687"
