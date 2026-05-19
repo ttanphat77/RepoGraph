@@ -1,50 +1,78 @@
-# Single source of truth — edit here to change experiment parameters
+# =============================================================================
+# config.py — Nguồn cấu hình duy nhất (Single Source of Truth)
+#
+# Mọi tham số thực nghiệm của hệ thống đều được đặt tại đây.
+# Các module khác chỉ import config, không tự định nghĩa hằng số riêng.
+# =============================================================================
 
-# ── Dataset ──────────────────────────────────────────────────────────────────
+# ── Dataset ───────────────────────────────────────────────────────────────────
+# Tên dataset trên HuggingFace Hub — dùng để tải SWE-bench Lite
 DATASET_NAME = "princeton-nlp/SWE-bench_Lite"
+
+# Đường dẫn cache local để tránh tải lại dataset mỗi lần chạy
 DATASET_CACHE = "cache/swebench_lite.json"
 
 # ── Repo storage ──────────────────────────────────────────────────────────────
+# Thư mục chứa các repo GitHub đã clone.
+# Mỗi repo được lưu dưới tên: {org_repo}_{short_commit}/
 REPOS_DIR = "repos"
 
 # ── Graph schema ──────────────────────────────────────────────────────────────
-# Switch between schemas without touching any other code.
-# Available values: "simple" | "detailed"
-#   simple   → Module, Class, Function / Defines, Calls, Imports, Inherits
-#   detailed → MODULE, CLASS, METHOD, FUNCTION, FIELD, GLOBAL_VARIABLE
-#              / CONTAINS, INHERITS, HAS_METHOD, HAS_FIELD, USES
+# Chọn schema đồ thị bằng cách đặt giá trị này.
+# Không cần sửa bất kỳ file nào khác trong pipeline.
+#
+#   "simple"   → Node: Module, Class, Function
+#                Edge: Defines, Calls, Imports, Inherits
+#                Phù hợp phân tích cấu trúc file-level, luồng gọi hàm.
+#
+#   "detailed" → Node: MODULE, CLASS, METHOD, FUNCTION, FIELD, GLOBAL_VARIABLE
+#                Edge: CONTAINS, INHERITS, HAS_METHOD, HAS_FIELD, USES
+#                Phân biệt method (trong class) vs function (module-level),
+#                theo dõi class attributes và global variables.
 ACTIVE_SCHEMA = "simple"
 
 # ── AST parsing ───────────────────────────────────────────────────────────────
-# Stop ingesting after this many files per repo (0 = unlimited)
+# Giới hạn số file được parse mỗi repo.
+# 0 = không giới hạn (parse toàn bộ repo).
+# Dùng giá trị nhỏ (vd: 50) để test nhanh trên repo lớn.
 MAX_FILES_PARSED = 0
 
-# Set False to skip Leiden community detection (slow on large repos)
+# Bật/tắt Louvain/Leiden community detection.
+# Khi True, mỗi node được gán thuộc tính `community` (int) sau khi parse.
+# Chậm trên repo có hàng nghìn node — tắt khi cần debug nhanh.
 ENABLE_COMMUNITY_DETECTION = True
 
-# Edge weights for community detection — higher = stronger community bond
+# Trọng số cạnh dùng cho thuật toán Leiden.
+# Cạnh có trọng số cao hơn → tạo "lực kéo" mạnh hơn giữa hai node,
+# khiến chúng có xu hướng nằm cùng community.
+# Ví dụ: INHERITS (3.0) > Calls (2.0) > Imports (1.5) vì kế thừa
+# thường thể hiện quan hệ kết hợp chặt hơn là gọi hàm hay import.
 COMMUNITY_EDGE_WEIGHTS: dict[str, float] = {
-    "INHERITS":   3.0,
+    "INHERITS":   3.0,   # kế thừa — liên kết chặt nhất
     "Inherits":   3.0,
-    "USES":       2.0,
-    "Calls":      2.0,
-    "IMPORTS":    1.5,
+    "USES":       2.0,   # gọi hàm (schema detailed)
+    "Calls":      2.0,   # gọi hàm (schema simple)
+    "IMPORTS":    1.5,   # import module
     "Imports":    1.5,
-    "HAS_METHOD": 1.0,
-    "Defines":    1.0,
-    "CONTAINS":   0.5,
-    "HAS_FIELD":  0.3,
+    "HAS_METHOD": 1.0,   # class chứa method
+    "Defines":    1.0,   # module/class định nghĩa entity
+    "CONTAINS":   0.5,   # quan hệ bao hàm chung (lỏng nhất)
+    "HAS_FIELD":  0.3,   # class chứa field (rất lỏng)
 }
 
 # ── Neo4j ─────────────────────────────────────────────────────────────────────
-NEO4J_URI = "bolt://localhost:7687"
-NEO4J_USER = "neo4j"
+# Kết nối Neo4j Community Edition chạy qua Docker (xem docker-compose.yml).
+# Thay đổi nếu dùng Neo4j AuraDB hoặc instance khác.
+NEO4J_URI      = "bolt://localhost:7687"
+NEO4J_USER     = "neo4j"
 NEO4J_PASSWORD = "graphrag123"
 
-# Batch size for MERGE writes
+# Số node/edge ghi vào Neo4j mỗi batch MERGE.
+# Tăng lên nếu mạng tốt và RAM đủ; giảm xuống nếu gặp timeout.
 NEO4J_BATCH_SIZE = 500
 
 # ── Validation ────────────────────────────────────────────────────────────────
-# Fail fast if ACTIVE_SCHEMA is misspelled — caught on first import of config.
+# Kiểm tra ngay khi import config — fail fast nếu ACTIVE_SCHEMA sai chính tả.
+# Không cần chờ đến lúc chạy pipeline mới phát hiện lỗi.
 from pipeline.schemas import load_schema as _load_schema
 _load_schema(ACTIVE_SCHEMA)

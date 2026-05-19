@@ -1,3 +1,29 @@
+"""
+scripts/build_graph.py — CLI entrypoint để xây dựng Knowledge Graph
+
+Hai chế độ:
+  swe-lite <index>  — Lấy instance thứ <index> trong SWE-bench Lite,
+                      clone repo tại đúng base_commit, parse và nạp vào Neo4j.
+  local <path>      — Parse một thư mục local (không cần dataset).
+
+Pipeline gồm 4 stage:
+  Stage 1 — Parallel AST Extraction:
+      Mỗi file .py được parse bởi ASTEngine trong ProcessPoolExecutor.
+      Dùng multiprocessing (không phải threading) vì CPython GIL.
+
+  Stage 2 — Cross-File Resolution:
+      ASTEngine.resolve_cross_file() nhận kết quả tất cả files,
+      xây index toàn cục, resolve call/inherit refs thành cạnh cụ thể.
+
+  Stage 3 — Community Detection (optional):
+      Leiden algorithm trên igraph. Gán community ID cho mỗi node.
+      Tắt mặc định vì chậm trên repo lớn (ENABLE_COMMUNITY_DETECTION).
+
+  Stage 4 — Bulk Ingestion:
+      MERGE nodes vào Neo4j → flush → MERGE edges (thứ tự bắt buộc).
+      Clear graph trước mỗi lần build để tránh data cũ lẫn vào.
+"""
+
 import argparse
 import sys
 import os
@@ -6,7 +32,7 @@ import logging
 import concurrent.futures
 from pathlib import Path
 
-# Add the project root to sys.path
+# Thêm project root vào sys.path để import pipeline từ bất kỳ thư mục nào
 sys.path.append(str(Path(__file__).parent.parent))
 
 from pipeline.dataset_loader import load_swe_bench_lite, save_cache, load_cache
@@ -16,15 +42,27 @@ from pipeline.schemas import load_schema
 from pipeline.neo4j_ingester import Neo4jIngester
 import config
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
 
+# tqdm là optional — nếu không cài thì bỏ qua progress bar
 try:
     from tqdm import tqdm
 except ImportError:
     tqdm = None
 
 
-def write_current_state(state: dict):
+def write_current_state(state: dict) -> None:
+    """
+    Ghi trạng thái instance hiện tại ra cache/current_instance.json.
+
+    File này được đọc bởi Streamlit UI để:
+      - Biết instance nào đang active
+      - Lấy problem_statement để hiển thị sẵn trong Issue Query tab
+      - Lấy gt_files để tô màu 🎯 và tính Precision/Recall
+    """
     path = Path("cache/current_instance.json")
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -32,15 +70,30 @@ def write_current_state(state: dict):
 
 
 def clear_graph(ingester: Neo4jIngester) -> None:
+    """
+    Xóa toàn bộ graph hiện tại trước khi build mới.
+
+    DETACH DELETE cũng xóa tất cả relationships trước khi xóa nodes.
+    Cần thiết để tránh data từ repo cũ lẫn vào graph mới.
+    """
     logging.info("Clearing existing graph data...")
     with ingester.driver.session() as session:
         session.run("MATCH (n) DETACH DELETE n")
     logging.info("Graph cleared.")
 
 
-def _parse_one_file(args):
-    """Top-level function so ProcessPoolExecutor can pickle it."""
+def _parse_one_file(args: tuple) -> dict | None:
+    """
+    Hàm top-level để ProcessPoolExecutor có thể pickle.
+
+    Phải là top-level function (không phải lambda hoặc method) vì
+    Python multiprocessing dùng pickle để truyền function giữa processes,
+    và pickle không serialize được closure hoặc lambda.
+
+    Mỗi worker process tạo ASTEngine + SchemaPlugin riêng — an toàn với multiprocessing.
+    """
     rel, repo_path, base_commit, schema_name = args
+    # Tạo schema mới trong worker process (không share với parent)
     schema = load_schema(schema_name)
     engine = ASTEngine(
         file_path=str(Path(repo_path) / rel),
@@ -51,24 +104,34 @@ def _parse_one_file(args):
     return engine.parse()
 
 
-def build_graph_from_repo(repo_path: str, base_commit: str = "local"):
+def build_graph_from_repo(repo_path: str, base_commit: str = "local") -> None:
+    """
+    Pipeline chính: parse repo → resolve cross-file → community detect → ingest.
+
+    Args:
+        repo_path:   Đường dẫn đến thư mục repo đã clone
+        base_commit: Commit hash hoặc "local" — dùng làm prefix cho node IDs
+    """
     schema = load_schema(config.ACTIVE_SCHEMA)
     logging.info(f"Active schema: {config.ACTIVE_SCHEMA!r}")
 
     py_files = get_python_files(repo_path)
     logging.info(f"Found {len(py_files)} Python files in {repo_path}")
 
-    max_files = config.MAX_FILES_PARSED if config.MAX_FILES_PARSED > 0 else len(py_files)
-    files_to_process = py_files[:max_files]
+    # MAX_FILES_PARSED = 0 nghĩa là không giới hạn
+    max_files      = config.MAX_FILES_PARSED if config.MAX_FILES_PARSED > 0 else len(py_files)
+    files_to_parse = py_files[:max_files]
 
-    # ── STAGE 1: Parallel Extraction ──────────────────────────────────────────
-    logging.info(f"Stage 1: Parsing {len(files_to_process)} files in parallel...")
+    # ── Stage 1: Parallel AST Extraction ─────────────────────────────────────
+    logging.info(f"Stage 1: Parsing {len(files_to_parse)} files in parallel...")
 
-    parse_args = [(f, repo_path, base_commit, config.ACTIVE_SCHEMA) for f in files_to_process]
+    # Đóng gói args thành tuple để pickle được (ProcessPoolExecutor yêu cầu)
+    parse_args  = [(f, repo_path, base_commit, config.ACTIVE_SCHEMA) for f in files_to_parse]
     all_results = []
 
     with concurrent.futures.ProcessPoolExecutor() as executor:
         futures = {executor.submit(_parse_one_file, a): a[0] for a in parse_args}
+
         if tqdm:
             pbar = tqdm(total=len(futures), desc="Extracting AST")
 
@@ -82,41 +145,52 @@ def build_graph_from_repo(repo_path: str, base_commit: str = "local"):
         if tqdm:
             pbar.close()
 
-    # ── STAGE 2: Cross-File Resolution ────────────────────────────────────────
+    # ── Stage 2: Cross-File Resolution ───────────────────────────────────────
+    # Phải chạy sau khi có kết quả của TẤT CẢ files (cần index toàn cục)
     logging.info("Stage 2: Resolving cross-file semantic edges...")
     semantic_edges = ASTEngine.resolve_cross_file(all_results, schema)
 
-    # ── STAGE 3: Community Detection ──────────────────────────────────────────
+    # ── Stage 3: Community Detection (Leiden) ────────────────────────────────
     if config.ENABLE_COMMUNITY_DETECTION:
         logging.info("Stage 3: Community Detection (Leiden)...")
         try:
             import igraph as ig
             import leidenalg
 
-            node_map = {}
+            # Xây dựng node index: node_id string → integer index cho igraph
+            node_map: dict[str, dict] = {}
             for res in all_results:
                 for node in res["nodes"]:
                     node_map[node["id"]] = node
 
-            node_ids = list(node_map.keys())
+            node_ids  = list(node_map.keys())
             node_index = {nid: i for i, nid in enumerate(node_ids)}
 
+            # Gom tất cả edges (definite + semantic) để xây graph cho Leiden
             all_edges_flat = [e for res in all_results for e in res["definite_edges"]]
             all_edges_flat.extend(semantic_edges)
 
-            edges = []
+            edges   = []
             weights = []
             for e in all_edges_flat:
-                if e["source"] in node_index and e["target"] in node_index and e["source"] != e["target"]:
-                    edges.append((node_index[e["source"]], node_index[e["target"]]))
+                src, tgt = e["source"], e["target"]
+                # Chỉ lấy edge có cả hai endpoint trong node_index (bỏ cross-repo)
+                if src in node_index and tgt in node_index and src != tgt:
+                    edges.append((node_index[src], node_index[tgt]))
+                    # Trọng số theo loại edge — xem COMMUNITY_EDGE_WEIGHTS trong config
                     weights.append(config.COMMUNITY_EDGE_WEIGHTS.get(e["type"], 1.0))
 
-            G = ig.Graph(n=len(node_ids), edges=edges)
+            # Leiden trên undirected graph (treat edges as undirected cho clustering)
+            G         = ig.Graph(n=len(node_ids), edges=edges)
             partition = leidenalg.find_partition(
-                G, leidenalg.RBConfigurationVertexPartition, weights=weights, seed=42
+                G,
+                leidenalg.RBConfigurationVertexPartition,
+                weights=weights,
+                seed=42,  # seed cố định để reproducible
             )
 
             logging.info(f"Found {len(partition)} communities.")
+            # Gán community ID vào properties của mỗi node
             for cid, members in enumerate(partition):
                 for idx in members:
                     node_map[node_ids[idx]]["properties"]["community"] = cid
@@ -126,74 +200,109 @@ def build_graph_from_repo(repo_path: str, base_commit: str = "local"):
     else:
         logging.info("Stage 3: Community Detection skipped (ENABLE_COMMUNITY_DETECTION=False).")
 
-    # ── STAGE 4: Atomic Bulk Ingestion ────────────────────────────────────────
+    # ── Stage 4: Bulk Ingestion vào Neo4j ────────────────────────────────────
     logging.info("Stage 4: Bulk Loading to Neo4j...")
     try:
         ingester = Neo4jIngester()
-        clear_graph(ingester)
+        clear_graph(ingester)  # xóa graph cũ trước
 
+        # Nạp tất cả nodes trước
         for res in all_results:
             for node in res["nodes"]:
                 ingester.add_node(node)
 
-        # Flush all nodes to Neo4j before writing edges — MATCH requires endpoints to exist
+        # FLUSH NODES TRƯỚC — bắt buộc vì edge query dùng MATCH endpoint
+        # Nếu không flush, MATCH sẽ fail khi node chưa commit vào DB
         ingester.flush()
 
+        # Nạp edges sau khi nodes đã có trong DB
         for res in all_results:
             for edge in res["definite_edges"]:
                 ingester.add_edge(edge)
 
+        # Cross-file semantic edges (Calls, Inherits)
         for edge in semantic_edges:
             ingester.add_edge(edge)
 
         ingester.flush()
         ingester.close()
         logging.info("Graph construction complete.")
+
     except Exception as e:
         logging.error(f"Failed to ingest to Neo4j: {e}")
 
 
-def handle_swe_lite(index: int):
+def handle_swe_lite(index: int) -> None:
+    """
+    Build graph từ instance thứ <index> trong SWE-bench Lite.
+
+    Dùng cache JSON nếu đã tải trước; tải mới từ HuggingFace nếu chưa có.
+    Index bắt đầu từ 1 (không phải 0) để user-friendly hơn.
+    """
     logging.info("Fetching SWE-bench-lite dataset...")
     try:
         instances = load_cache(config.DATASET_CACHE)
     except FileNotFoundError:
+        # Lần đầu chạy — tải từ HuggingFace và lưu cache
         instances = load_swe_bench_lite()
         save_cache(instances, config.DATASET_CACHE)
 
-    unique_repos = []
-    for inst in instances:
-        if inst["repo"] not in unique_repos:
-            unique_repos.append(inst["repo"])
-
-    if index < 1 or index > len(unique_repos):
-        logging.error(f"Index out of range. Provide 1–{len(unique_repos)}.")
+    if index < 1 or index > len(instances):
+        logging.error(f"Index out of range. Provide 1–{len(instances)}.")
         return
 
-    repo_name = unique_repos[index - 1]
-    logging.info(f"Target Repo: {repo_name}")
-    write_current_state({"instance_id": f"{repo_name}:latest", "gt_files": []})
-    repo_path = clone_and_checkout(repo_name, base_commit="latest")
-    build_graph_from_repo(repo_path, base_commit="latest")
+    instance         = instances[index - 1]
+    repo_name        = instance["repo"]
+    base_commit      = instance["base_commit"]
+    gt_files         = instance.get("gt_files", [])
+    problem_statement = instance.get("problem_statement", "")
+
+    logging.info(f"Instance: {instance['instance_id']}  repo: {repo_name}  commit: {base_commit}")
+    logging.info(f"GT files: {gt_files}")
+
+    # Lưu trạng thái để Streamlit UI đọc được gt_files và problem_statement
+    write_current_state({
+        "instance_id":       instance["instance_id"],
+        "repo":              repo_name,
+        "base_commit":       base_commit,
+        "problem_statement": problem_statement,
+        "gt_files":          gt_files,
+    })
+
+    repo_path = clone_and_checkout(repo_name, base_commit=base_commit)
+    build_graph_from_repo(repo_path, base_commit=base_commit)
 
 
-def handle_local(path: str):
+def handle_local(path: str) -> None:
+    """
+    Build graph từ một thư mục code local.
+
+    base_commit="local" → node IDs có prefix "local:" thay vì commit hash.
+    Không có GT files — dùng chủ yếu để debug và test với code của mình.
+    """
     if not Path(path).exists():
         logging.error(f"Path does not exist: {path}")
         return
-    write_current_state({"instance_id": "local", "gt_files": []})
+
+    write_current_state({
+        "instance_id": "local",
+        "gt_files":    [],
+    })
     build_graph_from_repo(path, base_commit="local")
 
 
-def main():
+def main() -> None:
+    """Entry point CLI — parse args và dispatch đến handler phù hợp."""
     parser = argparse.ArgumentParser(description="GraphRAG POC Graph Builder")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    # Subcommand: swe-lite
     p_swe = subparsers.add_parser("swe-lite", help="Build graph from SWE-bench-lite instance")
-    p_swe.add_argument("index", type=int)
+    p_swe.add_argument("index", type=int, help="Instance index (1-based)")
 
+    # Subcommand: local
     p_local = subparsers.add_parser("local", help="Build graph from a local folder")
-    p_local.add_argument("path", type=str)
+    p_local.add_argument("path", type=str, help="Path to local repo/directory")
 
     args = parser.parse_args()
     if args.command == "swe-lite":

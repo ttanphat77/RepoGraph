@@ -21,6 +21,9 @@ pandas==2.2.2
 leidenalg
 igraph
 
+# LLM
+anthropic>=0.40.0
+
 # Utilities
 gitpython==3.1.43
 tqdm==4.66.2
