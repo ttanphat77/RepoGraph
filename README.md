@@ -1,8 +1,6 @@
 # GraphRAG POC: File Localization cho SWE-bench
 
-Một Proof of Concept (POC) triển khai công nghệ Knowledge Graph ứng dụng cho bài toán **File Localization** (Dự đoán files cần sửa dựa trên issue text) thông qua bộ dữ liệu `SWE-bench Lite`. Hệ thống trích xuất cấu trúc mã nguồn (AST parsing) từ GitHub, xây dựng đồ thị tại lớp Semantic kết hợp Structural, và hiển thị trên Streamlit UI.
-
-Mục tiêu giai đoạn POC này là **xây dựng và kiểm chứng Neo4j Graph Schema** trước khi ứng dụng RAG Retrieval & LLM Evaluation.
+Một Proof of Concept (POC) triển khai công nghệ Knowledge Graph ứng dụng cho bài toán **File Localization** (Dự đoán files cần sửa dựa trên issue text) thông qua bộ dữ liệu `SWE-bench Lite`. Hệ thống trích xuất cấu trúc mã nguồn (AST parsing) từ GitHub, xây dựng đồ thị tại lớp Semantic kết hợp Structural, sau đó dùng GraphRAG pipeline để dự đoán file cần sửa và đánh giá bằng Precision / Recall / F1.
 
 ---
 
@@ -12,6 +10,8 @@ Mục tiêu giai đoạn POC này là **xây dựng và kiểm chứng Neo4j Gra
 - **AST Parsing nâng cao:** Trích xuất cấu trúc code với `tree-sitter`, phân giải cross-file references (call, inheritance) không tạo false-positive edge.
 - **Idempotency:** Dataset caching, git clone và Neo4j batch-ingestion đều chạy lại được mà không nhân bản dữ liệu.
 - **Single Commit Isolation:** Graph đồng bộ tại `base_commit` cố định, dễ đối chiếu với GT Files (Ground-Truth patch files).
+- **GraphRAG Pipeline:** Entity resolution → BFS neighborhood extraction → LLM generation để dự đoán file cần sửa từ issue text.
+- **Evaluation Metrics:** Tính Precision / Recall / F1 tự động so sánh với ground-truth patch files.
 - **Trực quan Graph:** Tích hợp File List (highlight GT files với `🎯`) và đồ thị tương tác `pyvis` trên Streamlit.
 
 ---
@@ -62,18 +62,22 @@ graphrag-poc/
 │   ├── neo4j_ingester.py        ← Batch MERGE/MATCH writes to Neo4j
 │   ├── repo_manager.py          ← Git clone, file discovery
 │   ├── dataset_loader.py        ← SWE-bench dataset loading & caching
+│   ├── retriever.py             ← GraphRAG Retriever: entity resolution → BFS → context
+│   ├── generator.py             ← LLM Generation: graph context → predicted files
+│   ├── evaluator.py             ← Orchestrator: retriever + generator + metrics
 │   └── schemas/
 │       ├── __init__.py          ← load_schema("simple" | "detailed")
 │       ├── base.py              ← SchemaPlugin ABC + ParseContext
 │       ├── simple.py            ← Schema "simple"
 │       └── detailed.py          ← Schema "detailed"
 │
-├── app/                         ← Streamlit UI
+├── app/                         ← Streamlit UI (inspect & visualize only)
 │   ├── main.py
 │   ├── neo4j_client.py          ← Read-only graph queries
 │   └── components/
-│       ├── file_view.py
-│       └── graph_view.py
+│       ├── file_view.py         ← Tab: danh sách file trong graph
+│       ├── graph_view.py        ← Tab: đồ thị tương tác pyvis
+│       └── query_view.py        ← Tab: Issue Query UI (gọi pipeline/evaluator.py)
 │
 ├── cache/                       ← JSON instance state & dataset cache
 └── repos/                       ← Cloned repo snapshots
@@ -125,7 +129,7 @@ python scripts/build_graph.py local "duong/dan/thu/muc"
 Pipeline chạy 4 stage:
 1. **Parallel AST Extraction** — parse tất cả `.py` files song song
 2. **Cross-File Resolution** — phân giải call/inheritance refs thành edges
-3. **Community Detection** — Louvain clustering *(tắt mặc định, bật bằng `ENABLE_COMMUNITY_DETECTION = True`)*
+3. **Community Detection** — Leiden clustering *(bật mặc định, tắt bằng `ENABLE_COMMUNITY_DETECTION = False`)*
 4. **Bulk Ingestion** — MERGE nodes, MATCH endpoints trước khi tạo edges
 
 ### 4. Bật Streamlit Dashboard
@@ -134,7 +138,11 @@ Pipeline chạy 4 stage:
 streamlit run app/main.py
 ```
 
-Truy cập `http://localhost:8501`. Tab **Graph View** có option "Depth" để duyệt dependency levels.
+Truy cập `http://localhost:8501`. Dashboard có 3 tab:
+
+- **File View** — danh sách file trong graph, highlight GT files với `🎯`
+- **Graph View** — đồ thị tương tác, chọn depth để duyệt dependency levels
+- **Issue Query** — nhập issue text → GraphRAG pipeline → dự đoán file cần sửa → Precision / Recall / F1
 
 ---
 
@@ -144,5 +152,5 @@ Truy cập `http://localhost:8501`. Tab **Graph View** có option "Depth" để 
 |---------|----------|-------|
 | `ACTIVE_SCHEMA` | `"simple"` | Schema đồ thị: `"simple"` hoặc `"detailed"` |
 | `MAX_FILES_PARSED` | `0` | Giới hạn số file parse (0 = không giới hạn) |
-| `ENABLE_COMMUNITY_DETECTION` | `False` | Bật/tắt Louvain clustering (chậm trên repo lớn) |
+| `ENABLE_COMMUNITY_DETECTION` | `True` | Bật/tắt Leiden clustering (chậm trên repo lớn) |
 | `NEO4J_BATCH_SIZE` | `500` | Số node/edge mỗi batch write |
