@@ -225,6 +225,7 @@ def build_graph_from_repo(repo_path: str, base_commit: str = "local") -> None:
             ingester.add_edge(edge)
 
         ingester.flush()
+        ingester.ensure_fulltext_index()
         ingester.close()
         logging.info("Graph construction complete.")
 

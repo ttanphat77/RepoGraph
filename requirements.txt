@@ -22,7 +22,7 @@ leidenalg
 igraph
 
 # LLM
-anthropic>=0.40.0
+google-genai>=1.0.0
 
 # Utilities
 gitpython==3.1.43

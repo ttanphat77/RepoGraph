@@ -6,9 +6,8 @@
 #
 # Cấu trúc UI:
 #   Sidebar  — trạng thái kết nối Neo4j
-#   Tab 1    — Graph View  : đồ thị tương tác NeoVis.js
-#   Tab 2    — File View   : danh sách file với highlight GT files
-#   Tab 3    — Issue Query : RAG retrieval + LLM generation
+#   Tab 1    — Graph + Query : NeoVis graph (cột phải) + RAG query (cột trái)
+#   Tab 2    — File View     : danh sách file với highlight GT files
 # =============================================================================
 
 import sys
@@ -21,8 +20,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 from app.neo4j_client import client
 from app.components.file_view import render_file_view
-from app.components.graph_view import render_graph_view
-from app.components.query_view import render_query_view
+from app.components.combined_view import render_combined_view
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="GraphRAG POC", layout="wide")
@@ -44,20 +42,16 @@ with st.sidebar:
     else:
         st.error("Neo4j: ✕ disconnected")
         st.info("Khởi động Neo4j và chạy build_graph.py trước.")
-        # st.stop() dừng render toàn bộ app — không hiển thị tabs khi không có data
         st.stop()
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_graph, tab_file, tab_query = st.tabs(["Graph View", "File View", "Issue Query"])
+tab_main, tab_file = st.tabs(["Graph & Query", "File View"])
 
-with tab_graph:
-    # Đồ thị tương tác NeoVis.js — kết nối trực tiếp từ browser đến Neo4j
-    render_graph_view()
+with tab_main:
+    # Cột trái: RAG query controls + results
+    # Cột phải: NeoVis graph với highlight từ kết quả query
+    render_combined_view()
 
 with tab_file:
     # Danh sách file với tìm kiếm và highlight GT files (🎯)
     render_file_view()
-
-with tab_query:
-    # RAG retrieval: issue text → graph → LLM → predicted files
-    render_query_view()

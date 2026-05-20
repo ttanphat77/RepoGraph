@@ -12,16 +12,18 @@ Luồng:
   issue_text
       │
       ▼
-  GraphRetriever.retrieve()   ← Bước 3: Entity Resolution + BFS
+  run_retrieval_only()        ← Retrieval thuần (không LLM) — dùng bởi streaming UI
       │
-      ▼
-  generator.generate()        ← Bước 4: LLM Generation (optional)
-      │
-      ▼
-  compute_metrics()           ← So sánh với GT files
+      ▼  (hoặc full pipeline)
+  run_rag_pipeline()          ← Retrieval + generate() + compute_metrics()
       │
       ▼
   dict kết quả thuần
+
+Lưu ý về streaming:
+  UI có thể gọi run_retrieval_only() + generate_stream() riêng biệt.
+  generate_stream() là generator yield từng chunk — inherently UI concern
+  (st.write_stream). compute_metrics() vẫn gọi từ evaluator sau khi stream xong.
 """
 
 from __future__ import annotations
@@ -32,6 +34,23 @@ from pipeline.retriever import GraphRetriever
 from pipeline.generator import generate
 
 logger = logging.getLogger(__name__)
+
+
+def run_retrieval_only(issue_text: str, depth: int = 2) -> dict:
+    """
+    Chỉ chạy bước Retrieval — không gọi LLM.
+
+    Dùng khi UI muốn stream LLM riêng (st.write_stream) thay vì gọi qua
+    run_rag_pipeline(). Caller tự gọi generate_stream() và compute_metrics() sau.
+
+    Returns:
+        dict với keys: candidates, seed_nodes, subgraph, context, candidate_files
+    """
+    retriever = GraphRetriever()
+    try:
+        return retriever.retrieve(issue_text, depth=depth)
+    finally:
+        retriever.close()
 
 
 def compute_metrics(predicted_files: list[str], gt_files: list[str]) -> dict:

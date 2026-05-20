@@ -2,13 +2,18 @@
 # app/components/query_view.py — Issue Query Tab (UI render only)
 #
 # Nguyên tắc: file này KHÔNG chứa business logic.
-# Mọi RAG pipeline logic đều được delegate đến pipeline/evaluator.py.
 #
-# Nhiệm vụ duy nhất của file này:
-#   1. Đọc trạng thái instance hiện tại (cache/current_instance.json)
-#   2. Render input controls (text area, selectbox, checkbox, button)
-#   3. Gọi run_rag_pipeline() với params từ UI
-#   4. Render kết quả trả về
+# Nhiệm vụ:
+#   1. Đọc trạng thái instance (cache/current_instance.json)
+#   2. Render input controls
+#   3. Gọi pipeline/evaluator.py cho retrieval và metrics
+#   4. Gọi pipeline/generator.py cho streaming LLM (UI concern — st.write_stream)
+#   5. Render kết quả
+#
+# Tại sao streaming ở đây thay vì evaluator?
+#   st.write_stream() là Streamlit-specific — không thể đặt trong pipeline/.
+#   Nhưng generate_stream() (generator function) nằm trong pipeline/generator.py,
+#   evaluator không cần biết về streaming.
 # =============================================================================
 
 from __future__ import annotations
@@ -21,15 +26,14 @@ import streamlit as st
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from pipeline.evaluator import run_rag_pipeline
+from pipeline.evaluator import run_retrieval_only, compute_metrics
+from pipeline.generator import generate_stream, _extract_files_from_answer
 
 
 def _load_current_instance() -> dict:
     """
     Đọc trạng thái instance hiện tại từ cache/current_instance.json.
-
     File này được ghi bởi build_graph.py sau mỗi lần build.
-    Trả về dict rỗng nếu chưa có file (lần đầu chạy).
     """
     path = os.path.join(
         os.path.dirname(__file__), "..", "..", "cache", "current_instance.json"
@@ -45,10 +49,9 @@ def _load_current_instance() -> dict:
 
 def _file_status_icon(file: str, gt_files: list[str], predicted: list[str]) -> str:
     """
-    Icon thể hiện kết quả dự đoán cho một file:
-      ✅ True Positive  — dự đoán đúng (cả trong GT lẫn predicted)
-      ❌ False Positive — dự đoán sai (predicted nhưng không phải GT)
-      🎯 False Negative — bỏ sót (GT nhưng không predicted)
+    ✅ True Positive  — dự đoán đúng
+    ❌ False Positive — dự đoán sai
+    🎯 False Negative — bỏ sót
     """
     in_gt   = file in gt_files
     in_pred = file in predicted
@@ -59,7 +62,7 @@ def _file_status_icon(file: str, gt_files: list[str], predicted: list[str]) -> s
 
 
 def render_query_view():
-    """Render tab Issue Query — delegates toàn bộ logic đến pipeline/evaluator.py."""
+    """Render tab Issue Query."""
 
     # ── Load instance state ───────────────────────────────────────────────────
     state    = _load_current_instance()
@@ -67,7 +70,7 @@ def render_query_view():
     problem  = state.get("problem_statement", "")
     instance = state.get("instance_id", "—")
 
-    # ── Sidebar: instance info + GT files ────────────────────────────────────
+    # ── Sidebar ───────────────────────────────────────────────────────────────
     with st.sidebar:
         st.divider()
         st.caption(f"**Instance:** {instance}")
@@ -90,9 +93,9 @@ def render_query_view():
             height=260,
             placeholder="Dán nội dung issue vào đây...",
         )
-        c1, c2   = st.columns([1, 1])
-        depth    = c1.selectbox("Depth BFS", [1, 2, 3], index=1)
-        run_llm  = c2.checkbox("Gọi LLM", value=True)
+        c1, c2  = st.columns([1, 1])
+        depth   = c1.selectbox("Depth BFS", [1, 2, 3], index=1)
+        run_llm = c2.checkbox("Gọi LLM", value=True)
         do_query = st.button("🔍  Retrieve + Generate", use_container_width=True)
 
     if not do_query:
@@ -104,36 +107,55 @@ def render_query_view():
         st.warning("Vui lòng nhập issue text.")
         return
 
-    # ── Gọi pipeline (toàn bộ logic nằm ở pipeline/evaluator.py) ─────────────
-    with st.spinner("Đang chạy RAG pipeline..."):
-        result = run_rag_pipeline(
-            issue_text=issue_text,
-            depth=depth,
-            run_llm=run_llm,
-            gt_files=gt_files,
-        )
+    # ── Bước 3: Retrieval (via evaluator) ────────────────────────────────────
+    with st.spinner("Đang truy xuất Knowledge Graph..."):
+        retrieval = run_retrieval_only(issue_text, depth=depth)
 
-    # ── Render: summary metrics ───────────────────────────────────────────────
+    candidates      = retrieval["candidates"]
+    seed_nodes      = retrieval["seed_nodes"]
+    subgraph        = retrieval["subgraph"]
+    context         = retrieval["context"]
+    candidate_files = retrieval["candidate_files"]
+
+    # Lưu node IDs để graph_view highlight khi user chuyển sang tab Graph
+    st.session_state["query_seed_ids"]     = [n["neo_id"] for n in seed_nodes]
+    st.session_state["query_subgraph_ids"] = [n["neo_id"] for n in subgraph["nodes"]]
+
+    # ── Retrieval metrics ─────────────────────────────────────────────────────
     with col_right:
         m1, m2, m3 = st.columns(3)
-        m1.metric("Identifiers", len(result["candidates"]))
-        m2.metric("Seed nodes",  len(result["seed_nodes"]))
-        m3.metric("Subgraph",    len(result["subgraph"]["nodes"]))
-
-        if run_llm:
-            t1, t2 = st.columns(2)
-            t1.metric("Input tokens",  result["input_tokens"])
-            t2.metric("Output tokens", result["output_tokens"])
+        m1.metric("Identifiers", len(candidates))
+        m2.metric("Seed nodes",  len(seed_nodes))
+        m3.metric("Subgraph",    len(subgraph["nodes"]))
+        token_ph = st.empty()  # điền sau khi stream xong
 
     st.divider()
 
-    # ── Render: predicted files + P/R/F1 ─────────────────────────────────────
     col_a, col_b = st.columns([1, 1], gap="large")
 
     with col_a:
         st.markdown("### Predicted Files")
+        files_ph   = st.empty()  # điền sau khi stream xong
+        metrics_ph = st.empty()  # điền sau khi stream xong
 
-        predicted_files = result["predicted_files"]
+    # ── Bước 4: Streaming LLM (UI concern — st.write_stream) ─────────────────
+    with col_b:
+        st.markdown("### LLM Answer")
+        meta = {}
+        if run_llm and context:
+            full_answer = st.write_stream(
+                generate_stream(issue_text, context, candidate_files, meta)
+            )
+        else:
+            full_answer = ""
+            st.info("LLM bị tắt hoặc không có context để gửi.")
+
+    # ── Post-stream: extract files + compute metrics (via evaluator) ──────────
+    predicted_files = _extract_files_from_answer(full_answer) if full_answer else candidate_files
+    metrics         = compute_metrics(predicted_files, gt_files)
+
+    # ── Render: predicted files ───────────────────────────────────────────────
+    with files_ph.container():
         if not predicted_files:
             st.warning("Không tìm được file nào.")
         else:
@@ -141,32 +163,31 @@ def render_query_view():
             for f in predicted_files:
                 icon = _file_status_icon(f, gt_files, predicted_files)
                 lines.append(f"{icon}  `{f}`")
-            # GT files bị miss — hiển thị ở cuối để thấy rõ false negatives
             for f in gt_files:
                 if f not in predicted_files:
                     lines.append(f"🎯  `{f}` *(GT — missed)*")
             st.markdown("\n\n".join(lines))
 
-        if gt_files and predicted_files:
+    # ── Render: P/R/F1 (từ evaluator.compute_metrics) ────────────────────────
+    if gt_files and predicted_files:
+        with metrics_ph.container():
             st.divider()
             mc1, mc2, mc3 = st.columns(3)
-            mc1.metric("Precision", f"{result['precision']:.0%}")
-            mc2.metric("Recall",    f"{result['recall']:.0%}")
-            mc3.metric("F1",        f"{result['f1']:.0%}")
+            mc1.metric("Precision", f"{metrics['precision']:.0%}")
+            mc2.metric("Recall",    f"{metrics['recall']:.0%}")
+            mc3.metric("F1",        f"{metrics['f1']:.0%}")
 
-    # ── Render: LLM answer ────────────────────────────────────────────────────
-    with col_b:
-        st.markdown("### LLM Answer")
-        if result["answer"]:
-            st.markdown(result["answer"])
-        else:
-            st.info("LLM bị tắt hoặc không có context để gửi.")
+    # ── Render: token usage ───────────────────────────────────────────────────
+    if meta:
+        with token_ph.container():
+            t1, t2 = st.columns(2)
+            t1.metric("Input tokens",  meta.get("input_tokens", 0))
+            t2.metric("Output tokens", meta.get("output_tokens", 0))
+            reason = meta.get("finish_reason", "")
+            if reason and reason not in ("FinishReason.STOP", "STOP", "INTERRUPTED"):
+                st.warning(f"⚠️ finish_reason: `{reason}`")
 
-    # ── Render: debug expanders ───────────────────────────────────────────────
-    candidates = result["candidates"]
-    seed_nodes = result["seed_nodes"]
-    context    = result["context"]
-
+    # ── Debug expanders ───────────────────────────────────────────────────────
     with st.expander(f"Identifiers trích xuất ({len(candidates)})"):
         st.write(candidates)
 
