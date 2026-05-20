@@ -48,23 +48,36 @@ ENABLE_COMMUNITY_DETECTION = True
 # Ví dụ: INHERITS (3.0) > Calls (2.0) > Imports (1.5) vì kế thừa
 # thường thể hiện quan hệ kết hợp chặt hơn là gọi hàm hay import.
 COMMUNITY_EDGE_WEIGHTS: dict[str, float] = {
-    "INHERITS":   3.0,   # kế thừa — liên kết chặt nhất
-    "Inherits":   3.0,
-    "USES":       2.0,   # gọi hàm (schema detailed)
-    "Calls":      2.0,   # gọi hàm (schema simple)
-    "IMPORTS":    1.5,   # import module
-    "Imports":    1.5,
-    "HAS_METHOD": 1.0,   # class chứa method
-    "Defines":    1.0,   # module/class định nghĩa entity
-    "CONTAINS":   0.5,   # quan hệ bao hàm chung (lỏng nhất)
-    "HAS_FIELD":  0.3,   # class chứa field (rất lỏng)
+    "INHERITS": 3.0,  # kế thừa — liên kết chặt nhất
+    "Inherits": 3.0,
+    "USES": 2.0,  # gọi hàm (schema detailed)
+    "Calls": 2.0,  # gọi hàm (schema simple)
+    "IMPORTS": 1.5,  # import module
+    "Imports": 1.5,
+    "HAS_METHOD": 1.0,  # class chứa method
+    "Defines": 1.0,  # module/class định nghĩa entity
+    "CONTAINS": 0.5,  # quan hệ bao hàm chung (lỏng nhất)
+    "HAS_FIELD": 0.3,  # class chứa field (rất lỏng)
 }
+
+# ── BM25 fulltext search ──────────────────────────────────────────────────────
+# Neo4j fulltext index (Lucene + BM25) dùng để tìm seed nodes từ issue text.
+# Bao gồm label của cả hai schema (simple + detailed) — label không tồn tại
+# trong DB sẽ bị bỏ qua tự động khi index.
+FULLTEXT_INDEX_NAME = "node_text_bm25"
+
+# Số node tối đa trả về từ BM25 query — đủ để bổ sung regex seeds,
+# không nên quá lớn để tránh loãng context BFS.
+BM25_SEED_LIMIT = 15
+
+# ── LLM ──────────────────────────────────────────────────────────────────────
+GEMINI_API_KEY = "AIzaSyAjDNGaSIAawgzzDf5aO-eZ1QOWlKqvYxg"  # điền key vào đây hoặc set env var GEMINI_API_KEY
 
 # ── Neo4j ─────────────────────────────────────────────────────────────────────
 # Kết nối Neo4j Community Edition chạy qua Docker (xem docker-compose.yml).
 # Thay đổi nếu dùng Neo4j AuraDB hoặc instance khác.
-NEO4J_URI      = "bolt://localhost:7687"
-NEO4J_USER     = "neo4j"
+NEO4J_URI = "bolt://localhost:7687"
+NEO4J_USER = "neo4j"
 NEO4J_PASSWORD = "graphrag123"
 
 # Số node/edge ghi vào Neo4j mỗi batch MERGE.
@@ -75,4 +88,5 @@ NEO4J_BATCH_SIZE = 500
 # Kiểm tra ngay khi import config — fail fast nếu ACTIVE_SCHEMA sai chính tả.
 # Không cần chờ đến lúc chạy pipeline mới phát hiện lỗi.
 from pipeline.schemas import load_schema as _load_schema
+
 _load_schema(ACTIVE_SCHEMA)

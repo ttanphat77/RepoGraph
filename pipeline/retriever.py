@@ -77,6 +77,7 @@ class GraphRetriever:
             config.NEO4J_URI,
             auth=(config.NEO4J_USER, config.NEO4J_PASSWORD),
         )
+        self._ensure_fulltext_index()
 
     def close(self) -> None:
         """Đóng kết nối Neo4j driver. Gọi sau khi xong request."""
@@ -100,13 +101,23 @@ class GraphRetriever:
               context         — chuỗi source code cho LLM
               candidate_files — danh sách file path xếp hạng theo relevance
         """
-        # Step 1 — Entity Resolution
+        # Step 1a — Entity Resolution (regex)
         candidates = self._extract_identifiers(issue_text)
         logger.info(f"Extracted {len(candidates)} identifier candidates: {candidates[:20]}")
 
-        # Step 2 — Seed Lookup
-        seed_nodes = self._find_seeds(candidates) if candidates else []
-        logger.info(f"Found {len(seed_nodes)} seed nodes in graph.")
+        # Step 1b — BM25 seed lookup (fallback + supplement khi regex thiếu)
+        bm25_nodes = self._bm25_seeds(issue_text)
+        logger.info(f"BM25 returned {len(bm25_nodes)} seed nodes.")
+
+        # Step 2 — Regex Seed Lookup + merge với BM25
+        regex_nodes = self._find_seeds(candidates) if candidates else []
+        logger.info(f"Regex found {len(regex_nodes)} seed nodes in graph.")
+
+        # Dedup theo neo_id — regex seeds ưu tiên (exact match), BM25 bổ sung
+        seen_ids: set[int] = {n["neo_id"] for n in regex_nodes}
+        extra = [n for n in bm25_nodes if n["neo_id"] not in seen_ids]
+        seed_nodes = regex_nodes + extra
+        logger.info(f"Combined seed nodes: {len(seed_nodes)} (regex={len(regex_nodes)}, bm25_new={len(extra)}).")
 
         # Step 3 — Neighborhood BFS
         subgraph = (
@@ -128,6 +139,22 @@ class GraphRetriever:
             "context":         context,
             "candidate_files": files,
         }
+
+    # ── Index setup ───────────────────────────────────────────────────────────
+
+    def _ensure_fulltext_index(self) -> None:
+        """Tạo fulltext index nếu chưa có — idempotent, an toàn gọi nhiều lần."""
+        query = f"""
+        CREATE FULLTEXT INDEX {config.FULLTEXT_INDEX_NAME} IF NOT EXISTS
+        FOR (n:Function|Class|FUNCTION|METHOD|CLASS)
+        ON EACH [n.name, n.source]
+        OPTIONS {{ indexConfig: {{ `fulltext.analyzer`: 'english' }} }}
+        """
+        try:
+            with self.driver.session() as session:
+                session.run(query)
+        except Exception as e:
+            logger.warning(f"Could not ensure fulltext index: {e}")
 
     # ── Step 1: Entity Resolution ─────────────────────────────────────────────
 
@@ -164,6 +191,55 @@ class GraphRetriever:
             found.add(fp)  # giữ nguyên path để match node.file
 
         return sorted(found)
+
+    # ── Step 1b: BM25 seed lookup ─────────────────────────────────────────────
+
+    def _bm25_seeds(self, issue_text: str) -> list[dict]:
+        """
+        Tìm seed nodes bằng BM25 fulltext search trên name + source.
+
+        Bổ sung cho regex seeds: bắt được các hàm liên quan đến issue
+        ngay cả khi issue không đề cập tên identifier chính xác.
+
+        Lucene query escaping: các ký tự đặc biệt (+, -, &&, ||, !, (, ),
+        {, }, [, ], ^, ", ~, *, ?, :, /) cần escape để tránh parse error.
+        Dùng phrase query đơn giản — chỉ giữ lại chữ cái và khoảng trắng.
+        """
+        # Strip Lucene special chars để tránh query parse error
+        safe_query = re.sub(r'[+\-&|!(){}\[\]^"~*?:\\/]', ' ', issue_text)
+        safe_query = ' '.join(safe_query.split())  # collapse whitespace
+
+        if not safe_query:
+            return []
+
+        cypher = """
+        CALL db.index.fulltext.queryNodes($index_name, $search_query)
+        YIELD node, score
+        RETURN
+            id(node)              AS neo_id,
+            labels(node)[0]       AS label,
+            node.id               AS identity,
+            node.name             AS name,
+            node.file             AS file,
+            node.start_line       AS start_line,
+            node.end_line         AS end_line,
+            node.source           AS source,
+            score
+        ORDER BY score DESC
+        LIMIT $limit
+        """
+        try:
+            with self.driver.session() as session:
+                result = session.run(
+                    cypher,
+                    index_name=config.FULLTEXT_INDEX_NAME,
+                    search_query=safe_query,
+                    limit=config.BM25_SEED_LIMIT,
+                )
+                return [dict(r) for r in result]
+        except Exception as e:
+            logger.warning(f"BM25 seed lookup failed: {e}")
+            return []
 
     # ── Step 2: Seed Lookup ───────────────────────────────────────────────────
 

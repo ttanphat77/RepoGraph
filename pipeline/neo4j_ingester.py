@@ -56,6 +56,33 @@ class Neo4jIngester:
         self.flush()
         self.driver.close()
 
+    def ensure_fulltext_index(self) -> None:
+        """
+        Tạo fulltext index BM25 trên name + source của các node code.
+
+        Bao gồm label của cả hai schema (simple + detailed). Label không
+        tồn tại trong DB sẽ bị Lucene bỏ qua tự động.
+
+        IF NOT EXISTS đảm bảo idempotency — gọi nhiều lần không lỗi.
+        Index phải được tạo SAU KHI nodes đã được flush vào DB.
+        """
+        query = f"""
+        CREATE FULLTEXT INDEX {config.FULLTEXT_INDEX_NAME} IF NOT EXISTS
+        FOR (n:Function|Class|FUNCTION|METHOD|CLASS)
+        ON EACH [n.name, n.source]
+        OPTIONS {{
+            indexConfig: {{
+                `fulltext.analyzer`: 'english'
+            }}
+        }}
+        """
+        try:
+            with self.driver.session() as session:
+                session.run(query)
+            logger.info(f"Fulltext index '{config.FULLTEXT_INDEX_NAME}' ensured.")
+        except Exception as e:
+            logger.error(f"Failed to create fulltext index: {e}")
+
     def add_node(self, node_dict: dict) -> None:
         """
         Thêm một node vào batch. Flush tự động nếu batch đầy.

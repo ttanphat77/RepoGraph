@@ -96,7 +96,7 @@ def _build_rels_js() -> str:
     return "{" + ", ".join(parts) + "}"
 
 
-def _render_neovis(cypher: str) -> None:
+def _render_neovis(cypher: str, query_seed_ids: list = None, query_sub_ids: list = None, height: int = 900) -> None:
     """
     Tạo và render NeoVis graph trong iframe Streamlit.
 
@@ -121,6 +121,9 @@ def _render_neovis(cypher: str) -> None:
     rels_js    = _build_rels_js()
     # Escape backtick vì Cypher string được đặt trong JS template literal
     cypher_esc = cypher.replace("`", "\\`")
+
+    query_seed_js = json.dumps(list(query_seed_ids or []))
+    query_sub_js  = json.dumps(list(query_sub_ids  or []))
 
     html = f"""<!DOCTYPE html>
 <html>
@@ -187,12 +190,34 @@ def _render_neovis(cypher: str) -> None:
     }}
 
     hr.divider {{ border: none; border-top: 1px solid #2a2a2a; margin: 0; }}
+
+    /* Toggle button — hiện khi panel đã ẩn */
+    #legendToggle {{
+      position: absolute; top: 12px; left: 12px; z-index: 101;
+      background: rgba(18,18,18,0.95); border: 1px solid #2e2e2e;
+      border-radius: 6px; padding: 5px 10px;
+      color: #888; font-size: 12px; cursor: pointer;
+      display: none;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    }}
+    #legendToggle:hover {{ color: #ccc; border-color: #555; }}
   </style>
 </head>
 <body>
   <div id="viz"></div>
 
+  <button id="legendToggle" onclick="showLegend()">☰ Legend</button>
+
   <div id="panel">
+    <!-- Panel header với nút đóng -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px;">
+      <span class="section-title" style="letter-spacing:.12em;">Legend</span>
+      <button onclick="hideLegend()"
+              style="background:transparent;border:none;color:#555;font-size:16px;
+                     cursor:pointer;line-height:1;padding:0 2px;"
+              title="Ẩn legend">✕</button>
+    </div>
+
     <!-- Depth segmented control -->
     <div style="display:flex;align-items:center;gap:10px;">
       <span class="section-title">Depth</span>
@@ -257,6 +282,28 @@ def _render_neovis(cypher: str) -> None:
       <span class="edge-line" style="background:#bf5fff"></span>
       <span>Inherits</span>
     </label>
+
+    <hr class="divider">
+
+    <!-- Query result highlight -->
+    <div style="display:flex;align-items:center;justify-content:space-between;">
+      <span class="section-title">Query Results</span>
+      <button id="clearQueryBtn" onclick="clearQueryHighlight()"
+              style="display:none;background:transparent;border:1px solid #444;
+                     border-radius:4px;color:#888;font-size:11px;cursor:pointer;
+                     padding:1px 6px;line-height:1.6;" title="Xoá highlight">×</button>
+    </div>
+    <div id="queryStatus" style="color:#666;font-size:11px;">Chưa có query.</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;" id="queryLegend" style="display:none">
+      <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:#aaa;">
+        <span style="display:inline-block;width:10px;height:10px;border-radius:50%;
+                     border:2px solid #ffe066;background:transparent;"></span> Seed
+      </span>
+      <span style="display:flex;align-items:center;gap:4px;font-size:11px;color:#aaa;">
+        <span style="display:inline-block;width:10px;height:10px;border-radius:50%;
+                     border:2px solid #ffffff;background:transparent;"></span> Subgraph
+      </span>
+    </div>
   </div>
 
   <script>
@@ -266,6 +313,16 @@ def _render_neovis(cypher: str) -> None:
     const NODE_LABEL_COLORS = {node_label_colors_js}; // label → hex
     const NODE_STYLES_MAP   = {node_styles_js};       // label → {{color, size}}
     const EDGE_STYLES_MAP   = {edge_styles_js};       // type → {{color, width}}
+
+    // Custom string IDs của seed/subgraph nodes từ retriever
+    // Dùng n.properties.id (stable string) thay vì Neo4j internal integer
+    // để tránh type mismatch giữa Python int và vis-network node ID
+    const QUERY_SEED_IDS = new Set({query_seed_js});
+    const QUERY_SUB_IDS  = new Set({query_sub_js});
+
+    // Vis-network IDs sau khi resolved trong completed event
+    const RESOLVED_SEED_VIZ = new Set();
+    const RESOLVED_SUB_VIZ  = new Set();
 
     /* ── State toàn cục ─────────────────────────────────────────────────── */
     let currentDepth    = 1;
@@ -375,7 +432,7 @@ def _render_neovis(cypher: str) -> None:
       _nodesDs = viz.nodes;
       _edgesDs = viz.edges;
 
-      // Populate node lookup tables
+      // Populate node lookup tables + resolve query IDs
       _nodesDs.get().forEach(n => {{
         const grp = (n.raw && n.raw.labels && n.raw.labels[0]) || 'Module';
         nodeGroupMap[n.id] = grp;
@@ -388,6 +445,13 @@ def _render_neovis(cypher: str) -> None:
                     || '#888888';
         nodeOrigColor[n.id] = col;
         nodeBaseColor[n.id] = col;
+
+        // Match custom string ID (n.properties.id) với QUERY_SEED/SUB_IDS
+        const customId = n.raw && n.raw.properties && n.raw.properties.id;
+        if (customId) {{
+          if (QUERY_SEED_IDS.has(customId)) RESOLVED_SEED_VIZ.add(n.id);
+          if (QUERY_SUB_IDS.has(customId))  RESOLVED_SUB_VIZ.add(n.id);
+        }}
       }});
 
       // Populate edge lookup tables
@@ -400,6 +464,14 @@ def _render_neovis(cypher: str) -> None:
         edgeBaseColor[e.id] = edgeOrigColor[e.id];
         edgeBaseWidth[e.id] = edgeOrigWidth[e.id];
       }});
+
+      // Auto-apply query highlight nếu có node IDs từ retriever
+      if (QUERY_SEED_IDS.size > 0 || QUERY_SUB_IDS.size > 0) {{
+        _updateQueryPanel();
+        applyState();
+      }} else {{
+        _updateQueryPanel();
+      }}
 
       // Click handler: highlight BFS neighbors khi click node
       _network.on('click', function(params) {{
@@ -466,38 +538,89 @@ def _render_neovis(cypher: str) -> None:
       applyState();
     }}
 
+    /* ── Query panel helpers ────────────────────────────────────────────── */
+    function _updateQueryPanel() {{
+      const hasQuery = QUERY_SEED_IDS.size > 0 || QUERY_SUB_IDS.size > 0;
+      document.getElementById('clearQueryBtn').style.display = hasQuery ? 'block' : 'none';
+      document.getElementById('queryLegend').style.display   = hasQuery ? 'flex'  : 'none';
+      document.getElementById('queryStatus').textContent = hasQuery
+        ? QUERY_SEED_IDS.size + ' seeds (' + RESOLVED_SEED_VIZ.size + ' matched) · '
+          + QUERY_SUB_IDS.size + ' subgraph (' + RESOLVED_SUB_VIZ.size + ' matched)'
+        : 'Chưa có query.';
+    }}
+
+    function clearQueryHighlight() {{
+      QUERY_SEED_IDS.clear();
+      QUERY_SUB_IDS.clear();
+      RESOLVED_SEED_VIZ.clear();
+      RESOLVED_SUB_VIZ.clear();
+      _updateQueryPanel();
+      applyState();
+    }}
+
+    /* ── Legend toggle ──────────────────────────────────────────────────── */
+    function hideLegend() {{
+      document.getElementById('panel').style.display = 'none';
+      document.getElementById('legendToggle').style.display = 'block';
+    }}
+
+    function showLegend() {{
+      document.getElementById('panel').style.display = 'flex';
+      document.getElementById('legendToggle').style.display = 'none';
+    }}
+
     /* ── Central state applier ──────────────────────────────────────────── */
     // Hàm duy nhất cập nhật visual state của toàn bộ graph.
-    // Gộp tất cả logic: filter + highlight + dim + community color
+    // Priority: manual click BFS > query highlight > normal
     function applyState() {{
       if (!_nodesDs) return;
-      const dimMode     = document.getElementById('dimMode').checked;
+      const dimMode      = document.getElementById('dimMode').checked;
       const hasSelection = lastSelectedId !== null;
+      const queryMode    = RESOLVED_SEED_VIZ.size > 0 || RESOLVED_SUB_VIZ.size > 0;
 
       /* Nodes */
       const nodeUpdates = _nodesDs.get().map(node => {{
         const typ = nodeGroupMap[node.id];
-        // Ẩn nếu type bị filter
         if (!visibleNodeTypes.has(typ))
           return {{ id: node.id, hidden: true }};
 
-        if (!hasSelection) {{
-          // Không có selection → show tất cả với base color
+        if (!hasSelection && !queryMode) {{
           return {{ id: node.id, hidden: false,
                     color: nodeColorObj(nodeBaseColor[node.id]),
                     borderWidth: 1, shadow: {{ enabled: false }} }};
         }}
 
-        if (highlightedSet.has(node.id)) {{
-          // Trong highlight set → border trắng + shadow để nổi bật
+        if (hasSelection) {{
+          // Manual BFS highlight — ưu tiên cao nhất
+          if (highlightedSet.has(node.id)) {{
+            return {{ id: node.id, hidden: false,
+                      color: nodeHighlightObj(nodeBaseColor[node.id]),
+                      borderWidth: 3,
+                      shadow: {{ enabled: true, color: 'rgba(255,255,255,0.35)',
+                                 size: 14, x: 0, y: 0 }} }};
+          }}
+          return {{ id: node.id, hidden: false,
+                    color: dimMode ? nodeDimObj() : nodeColorObj(nodeBaseColor[node.id]),
+                    borderWidth: 1, shadow: {{ enabled: false }} }};
+        }}
+
+        // Query mode: seed → viền vàng, subgraph → viền trắng, còn lại → dim
+        if (RESOLVED_SEED_VIZ.has(node.id)) {{
+          return {{ id: node.id, hidden: false,
+                    color: {{ background: nodeBaseColor[node.id], border: '#ffe066',
+                              highlight: {{ background: nodeBaseColor[node.id], border: '#ffe066' }},
+                              hover:      {{ background: nodeBaseColor[node.id], border: '#ffe066' }} }},
+                    borderWidth: 4,
+                    shadow: {{ enabled: true, color: 'rgba(255,224,102,0.55)',
+                               size: 18, x: 0, y: 0 }} }};
+        }}
+        if (RESOLVED_SUB_VIZ.has(node.id)) {{
           return {{ id: node.id, hidden: false,
                     color: nodeHighlightObj(nodeBaseColor[node.id]),
                     borderWidth: 3,
-                    shadow: {{ enabled: true, color: 'rgba(255,255,255,0.35)',
-                               size: 14, x: 0, y: 0 }} }};
+                    shadow: {{ enabled: true, color: 'rgba(255,255,255,0.25)',
+                               size: 10, x: 0, y: 0 }} }};
         }}
-
-        // Không trong highlight → dim hoặc giữ màu gốc tùy dimMode
         return {{ id: node.id, hidden: false,
                   color: dimMode ? nodeDimObj() : nodeColorObj(nodeBaseColor[node.id]),
                   borderWidth: 1, shadow: {{ enabled: false }} }};
@@ -505,32 +628,44 @@ def _render_neovis(cypher: str) -> None:
       _nodesDs.update(nodeUpdates);
 
       /* Edges */
+      const queryAllIds = new Set([...RESOLVED_SEED_VIZ, ...RESOLVED_SUB_VIZ]);
       const edgeUpdates = _edgesDs.get().map(edge => {{
         const typ        = edgeTypeMap[edge.id];
         const fromHidden = !visibleNodeTypes.has(nodeGroupMap[edge.from]);
         const toHidden   = !visibleNodeTypes.has(nodeGroupMap[edge.to]);
 
-        // Ẩn nếu edge type bị filter hoặc một trong hai endpoint bị ẩn
         if (!visibleEdgeTypes.has(typ) || fromHidden || toHidden)
           return {{ id: edge.id, hidden: true }};
 
         const baseW = edgeBaseWidth[edge.id] || 1;
 
-        if (!hasSelection) {{
+        if (!hasSelection && !queryMode) {{
           return {{ id: edge.id, hidden: false,
                     color: edgeColorObj(edgeBaseColor[edge.id]),
                     width: baseW, shadow: {{ enabled: false }} }};
         }}
 
-        if (highlightedSet.has(edge.from) && highlightedSet.has(edge.to)) {{
-          // Edge trong highlight → dày gấp đôi + shadow
+        if (hasSelection) {{
+          if (highlightedSet.has(edge.from) && highlightedSet.has(edge.to)) {{
+            return {{ id: edge.id, hidden: false,
+                      color: edgeColorObj(edgeBaseColor[edge.id]),
+                      width: baseW * 2,
+                      shadow: {{ enabled: true, color: 'rgba(255,255,255,0.2)',
+                                 size: 8, x: 0, y: 0 }} }};
+          }}
+          return {{ id: edge.id, hidden: false,
+                    color: dimMode ? edgeDimObj() : edgeColorObj(edgeBaseColor[edge.id]),
+                    width: baseW, shadow: {{ enabled: false }} }};
+        }}
+
+        // Query mode edges
+        if (queryAllIds.has(edge.from) && queryAllIds.has(edge.to)) {{
           return {{ id: edge.id, hidden: false,
                     color: edgeColorObj(edgeBaseColor[edge.id]),
                     width: baseW * 2,
-                    shadow: {{ enabled: true, color: 'rgba(255,255,255,0.2)',
+                    shadow: {{ enabled: true, color: 'rgba(255,224,102,0.2)',
                                size: 8, x: 0, y: 0 }} }};
         }}
-
         return {{ id: edge.id, hidden: false,
                   color: dimMode ? edgeDimObj() : edgeColorObj(edgeBaseColor[edge.id]),
                   width: baseW, shadow: {{ enabled: false }} }};
@@ -540,8 +675,7 @@ def _render_neovis(cypher: str) -> None:
   </script>
 </body>
 </html>"""
-    # height=900 đủ để hiện graph không bị crop trên màn hình 1080p
-    st.components.v1.html(html, height=900, scrolling=False)
+    st.components.v1.html(html, height=height, scrolling=False)
 
 
 def render_graph_view():
@@ -559,4 +693,7 @@ def render_graph_view():
     # LIMIT 2000: với repo lớn (vd: Django), full graph có thể hàng chục nghìn node
     # NeoVis/vis-network bắt đầu lag rõ khi >2000 node do physics simulation
     cypher = "MATCH (n)-[r]->(m) RETURN n, r, m LIMIT 2000"
-    _render_neovis(cypher)
+
+    seed_ids = st.session_state.get("query_seed_ids", [])
+    sub_ids  = st.session_state.get("query_subgraph_ids", [])
+    _render_neovis(cypher, query_seed_ids=seed_ids, query_sub_ids=sub_ids)

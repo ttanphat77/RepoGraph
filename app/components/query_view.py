@@ -29,7 +29,7 @@ import streamlit as st
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from pipeline.retriever import GraphRetriever
-from pipeline.generator import generate
+from pipeline.generator import generate_stream, _extract_files_from_answer
 
 
 def _load_current_instance() -> dict:
@@ -128,27 +128,17 @@ def render_query_view():
     context         = result["context"]
     candidate_files = result["candidate_files"]
 
-    # ── LLM Generation ────────────────────────────────────────────────────────
-    llm_result = None
-    if run_llm and context:
-        with st.spinner("Đang gọi LLM..."):
-            llm_result = generate(issue_text, context, candidate_files)
-        predicted_files = llm_result.get("predicted_files", candidate_files)
-    else:
-        # Không gọi LLM → dùng candidate_files từ graph làm prediction
-        predicted_files = candidate_files
+    # Lưu node IDs để graph_view highlight khi user chuyển sang tab Graph
+    st.session_state["query_seed_ids"] = [n["neo_id"] for n in seed_nodes]
+    st.session_state["query_subgraph_ids"] = [n["neo_id"] for n in subgraph["nodes"]]
 
-    # ── Metrics summary ───────────────────────────────────────────────────────
+    # ── Retrieval metrics ─────────────────────────────────────────────────────
     with col_right:
         m1, m2, m3 = st.columns(3)
         m1.metric("Identifiers", len(candidates))
         m2.metric("Seed nodes",  len(seed_nodes))
         m3.metric("Subgraph",    len(subgraph["nodes"]))
-
-        if llm_result:
-            t1, t2 = st.columns(2)
-            t1.metric("Input tokens",  llm_result["input_tokens"])
-            t2.metric("Output tokens", llm_result["output_tokens"])
+        token_ph = st.empty()   # filled after stream completes
 
     st.divider()
 
@@ -157,7 +147,25 @@ def render_query_view():
 
     with col_a:
         st.markdown("### Predicted Files")
+        files_ph = st.empty()   # filled after stream completes
+        metrics_ph = st.empty() # filled after stream completes
 
+    # ── Stream LLM answer ─────────────────────────────────────────────────────
+    with col_b:
+        st.markdown("### LLM Answer")
+        meta = {}
+        if run_llm and context:
+            full_answer = st.write_stream(
+                generate_stream(issue_text, context, candidate_files, meta)
+            )
+        else:
+            full_answer = ""
+            st.info("LLM bị tắt hoặc không có context để gửi.")
+
+    # ── Fill placeholders after stream ────────────────────────────────────────
+    predicted_files = _extract_files_from_answer(full_answer) if full_answer else candidate_files
+
+    with files_ph.container():
         if not predicted_files:
             st.warning("Không tìm được file nào.")
         else:
@@ -165,33 +173,32 @@ def render_query_view():
             for f in predicted_files:
                 icon = _file_status_icon(f, gt_files, predicted_files)
                 lines.append(f"{icon}  `{f}`")
-            # Thêm GT files bị miss vào cuối để thấy rõ false negatives
             for f in gt_files:
                 if f not in predicted_files:
                     lines.append(f"🎯  `{f}` *(GT — missed)*")
             st.markdown("\n\n".join(lines))
 
-        # Tính Precision / Recall / F1 nếu có GT files để so sánh
-        if gt_files and predicted_files:
-            tp        = len(set(predicted_files) & set(gt_files))
-            precision = tp / len(predicted_files) if predicted_files else 0
-            recall    = tp / len(gt_files) if gt_files else 0
-            f1 = (
-                2 * precision * recall / (precision + recall)
-                if (precision + recall) > 0 else 0
-            )
+    if gt_files and predicted_files:
+        tp        = len(set(predicted_files) & set(gt_files))
+        precision = tp / len(predicted_files) if predicted_files else 0
+        recall    = tp / len(gt_files) if gt_files else 0
+        f1 = (2 * precision * recall / (precision + recall)
+              if (precision + recall) > 0 else 0)
+        with metrics_ph.container():
             st.divider()
             mc1, mc2, mc3 = st.columns(3)
             mc1.metric("Precision", f"{precision:.0%}")
             mc2.metric("Recall",    f"{recall:.0%}")
             mc3.metric("F1",        f"{f1:.0%}")
 
-    with col_b:
-        st.markdown("### LLM Answer")
-        if llm_result:
-            st.markdown(llm_result["answer"])
-        else:
-            st.info("LLM bị tắt hoặc không có context để gửi.")
+    if meta:
+        with token_ph.container():
+            t1, t2 = st.columns(2)
+            t1.metric("Input tokens",  meta.get("input_tokens", 0))
+            t2.metric("Output tokens", meta.get("output_tokens", 0))
+            reason = meta.get("finish_reason", "")
+            if reason and reason not in ("FinishReason.STOP", "STOP", "INTERRUPTED"):
+                st.warning(f"⚠️ finish_reason: `{reason}`")
 
     # ── Debug expanders ───────────────────────────────────────────────────────
     # Dùng expander để không chiếm không gian màn hình mặc định
