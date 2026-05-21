@@ -1,0 +1,30 @@
+# Graph DB
+neo4j==5.19.0
+
+# Dataset
+datasets==2.19.0
+huggingface-hub==0.22.2
+
+# AST parsing
+tree-sitter==0.21.3
+tree-sitter-python==0.21.0
+
+# Patch parsing
+unidiff==0.7.5
+
+# Streamlit + visualization
+streamlit==1.33.0
+pyvis==0.3.2
+pandas==2.2.2
+
+# Community detection
+leidenalg
+igraph
+
+# LLM
+google-genai>=1.0.0
+
+# Utilities
+gitpython==3.1.43
+tqdm==4.66.2
+python-dotenv==1.0.1
