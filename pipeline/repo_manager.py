@@ -104,28 +104,77 @@ def clone_and_checkout(repo_name: str, base_commit: str) -> str:
 def get_python_files(repo_path: str) -> list[str]:
     """
     Liệt kê tất cả file .py trong repo, trả về đường dẫn tương đối.
+    """
+    return get_source_files(repo_path, (".py",))
+
+
+def get_source_files(repo_path: str, extensions: tuple[str, ...]) -> list[str]:
+    """
+    Liệt kê tất cả file có extension trong extensions, trả về đường dẫn tương đối.
 
     Bỏ qua thư mục .git/ để không parse metadata của git.
-    Đường dẫn dùng '/' thay '\\' ngay cả trên Windows để nhất quán
-    với module_id format trong pipeline.
-
-    Returns:
-        list[str]: đường dẫn relative, vd: ["django/db/models.py", ...]
     """
-    py_files = []
+    result = []
     base_path = Path(repo_path)
 
     for root, _, files in os.walk(base_path):
-        # Bỏ qua thư mục .git — chứa binary objects, không phải source code
         if ".git" in root:
             continue
-
         for file in files:
-            if file.endswith(".py"):
+            if any(file.endswith(ext) for ext in extensions):
                 full_path = Path(root) / file
-                # Chuyển về relative path so với root repo
                 rel_path = full_path.relative_to(base_path)
-                # Normalize separator để nhất quán trên mọi OS
-                py_files.append(str(rel_path).replace("\\", "/"))
+                result.append(str(rel_path).replace("\\", "/"))
 
-    return py_files
+    return result
+
+
+def _inject_token(url: str, token: str) -> str:
+    """Inject oauth2 token vào HTTPS URL để clone private repo."""
+    if url.startswith("https://"):
+        return url.replace("https://", f"https://oauth2:{token}@", 1)
+    return url
+
+
+def clone_from_url(url: str, branch: str | None = None, token: str | None = None) -> str:
+    """
+    Clone repo từ bất kỳ git URL nào. Idempotent.
+
+    Args:
+        url:    Git URL (https hoặc ssh), vd: https://github.com/org/repo.git
+        branch: Tên branch cụ thể, hoặc None để dùng default branch
+        token:  Access token cho private repo (HTTPS only)
+
+    Returns:
+        Đường dẫn tuyệt đối đến thư mục repo đã clone.
+    """
+    # Tạo tên thư mục từ URL — bỏ .git suffix, thay ký tự đặc biệt bằng _
+    repo_slug = url.rstrip("/").rstrip(".git").split("/")[-1]
+    branch_suffix = f"_{branch}" if branch else ""
+    repo_path = os.path.join(config.REPOS_DIR, f"{repo_slug}{branch_suffix}")
+    path = Path(repo_path)
+
+    if path.exists() and (path / ".git").exists():
+        logger.info(f"Repository already exists at {repo_path}. Skipping clone.")
+        return repo_path
+
+    if path.exists():
+        shutil.rmtree(path)
+
+    clone_url = _inject_token(url, token) if token else url
+    logger.info(f"Cloning {url} into {repo_path}...")
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        kwargs = {}
+        if branch:
+            kwargs["branch"] = branch
+        Repo.clone_from(clone_url, repo_path, **kwargs)
+        logger.info(f"Successfully cloned {url}")
+    except Exception as e:
+        logger.error(f"Failed to clone {url}: {e}")
+        if path.exists():
+            shutil.rmtree(path, ignore_errors=True)
+        raise
+
+    return repo_path

@@ -1,9 +1,15 @@
 # =============================================================================
 # config.py — Nguồn cấu hình duy nhất (Single Source of Truth)
 #
-# Mọi tham số thực nghiệm của hệ thống đều được đặt tại đây.
-# Các module khác chỉ import config, không tự định nghĩa hằng số riêng.
+# Secrets (API keys, passwords) được load từ .env — KHÔNG hardcode ở đây.
+# Tạo file .env từ .env.example và điền giá trị thực.
 # =============================================================================
+
+import os
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ── Dataset ───────────────────────────────────────────────────────────────────
 # Tên dataset trên HuggingFace Hub — dùng để tải SWE-bench Lite
@@ -71,18 +77,25 @@ FULLTEXT_INDEX_NAME = "node_text_bm25"
 BM25_SEED_LIMIT = 15
 
 # ── LLM ──────────────────────────────────────────────────────────────────────
-GEMINI_API_KEY = "AIzaSyAjDNGaSIAawgzzDf5aO-eZ1QOWlKqvYxg"  # điền key vào đây hoặc set env var GEMINI_API_KEY
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = "gemini-3.5-flash"
 
 # ── Neo4j ─────────────────────────────────────────────────────────────────────
 # Kết nối Neo4j Community Edition chạy qua Docker (xem docker-compose.yml).
 # Thay đổi nếu dùng Neo4j AuraDB hoặc instance khác.
-NEO4J_URI = "bolt://localhost:7687"
-NEO4J_USER = "neo4j"
-NEO4J_PASSWORD = "graphrag123"
+NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "graphrag123")
 
 # Số node/edge ghi vào Neo4j mỗi batch MERGE.
 # Tăng lên nếu mạng tốt và RAM đủ; giảm xuống nếu gặp timeout.
 NEO4J_BATCH_SIZE = 500
+
+# ── GitLab Triage Bot ────────────────────────────────────────────────────────
+GITLAB_WEBHOOK_SECRET = os.getenv("GITLAB_WEBHOOK_SECRET", "")
+GITLAB_BOT_PAT        = os.getenv("GITLAB_BOT_PAT", "")
+GITLAB_BOT_USER_ID    = int(os.getenv("GITLAB_BOT_USER_ID", "0"))
+GITLAB_API_URL        = os.getenv("GITLAB_API_URL", "https://gitlab.com/api/v4").rstrip("/")
 
 # ── Validation ────────────────────────────────────────────────────────────────
 # Kiểm tra ngay khi import config — fail fast nếu ACTIVE_SCHEMA sai chính tả.

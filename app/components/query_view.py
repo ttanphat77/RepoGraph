@@ -27,7 +27,7 @@ import streamlit as st
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from pipeline.evaluator import run_retrieval_only, compute_metrics
-from pipeline.generator import generate_stream, _extract_files_from_answer
+from pipeline.generator import generate_stream, extract_files_from_answer
 
 
 def _load_current_instance() -> dict:
@@ -69,15 +69,6 @@ def render_query_view():
     gt_files = state.get("gt_files", [])
     problem  = state.get("problem_statement", "")
     instance = state.get("instance_id", "—")
-
-    # ── Sidebar ───────────────────────────────────────────────────────────────
-    with st.sidebar:
-        st.divider()
-        st.caption(f"**Instance:** {instance}")
-        if gt_files:
-            st.caption(f"**GT files ({len(gt_files)}):**")
-            for f in gt_files:
-                st.caption(f"  🎯 `{f}`")
 
     # ── Header ────────────────────────────────────────────────────────────────
     st.subheader("Issue Query")
@@ -144,14 +135,14 @@ def render_query_view():
         meta = {}
         if run_llm and context:
             full_answer = st.write_stream(
-                generate_stream(issue_text, context, candidate_files, meta)
+                generate_stream(issue_text, context, meta)
             )
         else:
             full_answer = ""
             st.info("LLM bị tắt hoặc không có context để gửi.")
 
     # ── Post-stream: extract files + compute metrics (via evaluator) ──────────
-    predicted_files = _extract_files_from_answer(full_answer) if full_answer else candidate_files
+    predicted_files = extract_files_from_answer(full_answer) if full_answer else candidate_files
     metrics         = compute_metrics(predicted_files, gt_files)
 
     # ── Render: predicted files ───────────────────────────────────────────────

@@ -22,11 +22,7 @@ from app.neo4j_client import client
 def render_file_view():
     """Render tab File View — danh sách file với search và GT highlight."""
 
-    # ── Sidebar controls ──────────────────────────────────────────────────────
-    with st.sidebar:
-        st.divider()
-        # Text input để filter file list theo tên
-        search = st.text_input("Search files...")
+    search = st.text_input("Search files...")
 
     # ── Lấy data ──────────────────────────────────────────────────────────────
     modules = client.get_modules()

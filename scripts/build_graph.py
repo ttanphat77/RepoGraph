@@ -1,10 +1,11 @@
 """
 scripts/build_graph.py — CLI entrypoint để xây dựng Knowledge Graph
 
-Hai chế độ:
+Ba chế độ:
   swe-lite <index>  — Lấy instance thứ <index> trong SWE-bench Lite,
                       clone repo tại đúng base_commit, parse và nạp vào Neo4j.
   local <path>      — Parse một thư mục local (không cần dataset).
+  url <url>         — Clone từ git URL bất kỳ (GitHub/GitLab/...) và build graph.
 
 Pipeline gồm 4 stage:
   Stage 1 — Parallel AST Extraction:
@@ -36,11 +37,18 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
 from pipeline.dataset_loader import load_swe_bench_lite, save_cache, load_cache
-from pipeline.repo_manager import clone_and_checkout, get_python_files
+from pipeline.repo_manager import clone_and_checkout, get_python_files, clone_from_url, get_source_files
 from pipeline.ast_engine import ASTEngine
 from pipeline.schemas import load_schema
 from pipeline.neo4j_ingester import Neo4jIngester
+from pipeline.languages.python import python_extractor
+from pipeline.languages.swift import swift_extractor
 import config
+
+LANG_CONFIG = {
+    "python": {"extractor": python_extractor, "extensions": (".py",)},
+    "swift":  {"extractor": swift_extractor,  "extensions": (".swift",)},
+}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -92,41 +100,46 @@ def _parse_one_file(args: tuple) -> dict | None:
 
     Mỗi worker process tạo ASTEngine + SchemaPlugin riêng — an toàn với multiprocessing.
     """
-    rel, repo_path, base_commit, schema_name = args
-    # Tạo schema mới trong worker process (không share với parent)
+    rel, repo_path, base_commit, schema_name, lang = args
     schema = load_schema(schema_name)
+    extractor = LANG_CONFIG[lang]["extractor"]
     engine = ASTEngine(
         file_path=str(Path(repo_path) / rel),
         repo_path=repo_path,
         base_commit=base_commit,
         schema=schema,
+        extractor=extractor,
     )
     return engine.parse()
 
 
-def build_graph_from_repo(repo_path: str, base_commit: str = "local") -> None:
+def build_graph_from_repo(repo_path: str, base_commit: str = "local", lang: str = "python") -> None:
     """
     Pipeline chính: parse repo → resolve cross-file → community detect → ingest.
 
     Args:
         repo_path:   Đường dẫn đến thư mục repo đã clone
         base_commit: Commit hash hoặc "local" — dùng làm prefix cho node IDs
+        lang:        Ngôn ngữ lập trình ("python" hoặc "swift")
     """
+    if lang not in LANG_CONFIG:
+        logging.error(f"Unsupported language: {lang!r}. Choose from: {list(LANG_CONFIG)}")
+        return
+
     schema = load_schema(config.ACTIVE_SCHEMA)
-    logging.info(f"Active schema: {config.ACTIVE_SCHEMA!r}")
+    logging.info(f"Active schema: {config.ACTIVE_SCHEMA!r}, lang: {lang!r}")
 
-    py_files = get_python_files(repo_path)
-    logging.info(f"Found {len(py_files)} Python files in {repo_path}")
+    extensions = LANG_CONFIG[lang]["extensions"]
+    source_files = get_source_files(repo_path, extensions)
+    logging.info(f"Found {len(source_files)} {lang} files in {repo_path}")
 
-    # MAX_FILES_PARSED = 0 nghĩa là không giới hạn
-    max_files      = config.MAX_FILES_PARSED if config.MAX_FILES_PARSED > 0 else len(py_files)
-    files_to_parse = py_files[:max_files]
+    max_files      = config.MAX_FILES_PARSED if config.MAX_FILES_PARSED > 0 else len(source_files)
+    files_to_parse = source_files[:max_files]
 
     # ── Stage 1: Parallel AST Extraction ─────────────────────────────────────
     logging.info(f"Stage 1: Parsing {len(files_to_parse)} files in parallel...")
 
-    # Đóng gói args thành tuple để pickle được (ProcessPoolExecutor yêu cầu)
-    parse_args  = [(f, repo_path, base_commit, config.ACTIVE_SCHEMA) for f in files_to_parse]
+    parse_args  = [(f, repo_path, base_commit, config.ACTIVE_SCHEMA, lang) for f in files_to_parse]
     all_results = []
 
     with concurrent.futures.ProcessPoolExecutor() as executor:
@@ -271,15 +284,12 @@ def handle_swe_lite(index: int) -> None:
     })
 
     repo_path = clone_and_checkout(repo_name, base_commit=base_commit)
-    build_graph_from_repo(repo_path, base_commit=base_commit)
+    build_graph_from_repo(repo_path, base_commit=base_commit, lang="python")
 
 
-def handle_local(path: str) -> None:
+def handle_local(path: str, lang: str = "python") -> None:
     """
     Build graph từ một thư mục code local.
-
-    base_commit="local" → node IDs có prefix "local:" thay vì commit hash.
-    Không có GT files — dùng chủ yếu để debug và test với code của mình.
     """
     if not Path(path).exists():
         logging.error(f"Path does not exist: {path}")
@@ -289,7 +299,23 @@ def handle_local(path: str) -> None:
         "instance_id": "local",
         "gt_files":    [],
     })
-    build_graph_from_repo(path, base_commit="local")
+    build_graph_from_repo(path, base_commit="local", lang=lang)
+
+
+def handle_url(url: str, branch: str | None = None, token: str | None = None, lang: str = "python") -> None:
+    """
+    Clone từ git URL bất kỳ và build graph.
+    """
+    try:
+        repo_path = clone_from_url(url, branch=branch, token=token)
+    except Exception:
+        return
+
+    write_current_state({
+        "instance_id": url,
+        "gt_files":    [],
+    })
+    build_graph_from_repo(repo_path, base_commit="local", lang=lang)
 
 
 def main() -> None:
@@ -304,12 +330,22 @@ def main() -> None:
     # Subcommand: local
     p_local = subparsers.add_parser("local", help="Build graph from a local folder")
     p_local.add_argument("path", type=str, help="Path to local repo/directory")
+    p_local.add_argument("-l", "--lang", default="python", choices=list(LANG_CONFIG), help="Programming language")
+
+    # Subcommand: url
+    p_url = subparsers.add_parser("url", help="Clone from a git URL and build graph")
+    p_url.add_argument("url", type=str, help="Git URL (https or ssh)")
+    p_url.add_argument("-b", "--branch", default=None, help="Branch name (default: repo default branch)")
+    p_url.add_argument("--token", default=None, help="Access token for private repos (HTTPS only)")
+    p_url.add_argument("-l", "--lang", default="python", choices=list(LANG_CONFIG), help="Programming language")
 
     args = parser.parse_args()
     if args.command == "swe-lite":
         handle_swe_lite(args.index)
     elif args.command == "local":
-        handle_local(args.path)
+        handle_local(args.path, lang=args.lang)
+    elif args.command == "url":
+        handle_url(args.url, branch=args.branch, token=args.token, lang=args.lang)
 
 
 if __name__ == "__main__":

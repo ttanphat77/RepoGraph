@@ -26,7 +26,7 @@ from app.components.query_view import (
     _file_status_icon,
 )
 from pipeline.retriever import GraphRetriever
-from pipeline.generator import generate_stream, _extract_files_from_answer
+from pipeline.generator import generate_stream, extract_files_from_answer
 
 
 def render_combined_view() -> None:
@@ -46,13 +46,13 @@ def render_combined_view() -> None:
     problem  = state.get("problem_statement", "")
     instance = state.get("instance_id", "—")
 
-    with st.sidebar:
-        st.divider()
-        st.caption(f"**Instance:** {instance}")
+    # ── Instance info ────────────────────────────────────────────────────────
+    with st.expander(f"Instance: {instance}" + (f"  —  {len(gt_files)} GT files" if gt_files else ""), expanded=False):
         if gt_files:
-            st.caption(f"**GT files ({len(gt_files)}):**")
             for f in gt_files:
-                st.caption(f"  🎯 `{f}`")
+                st.caption(f"🎯 `{f}`")
+        else:
+            st.caption("Không có GT files.")
 
     # ── Graph (full width, chiều cao cố định) ────────────────────────────────
     seed_ids = st.session_state.get("query_seed_ids", [])
@@ -127,36 +127,74 @@ def _render_query_results(
     st.session_state["query_seed_ids"]     = [n["identity"] for n in seed_nodes if n.get("identity")]
     st.session_state["query_subgraph_ids"] = [n["identity"] for n in subgraph["nodes"] if n.get("identity")]
 
-    # ── Retrieval metrics ─────────────────────────────────────────────────────
+    # ── Retrieval summary ─────────────────────────────────────────────────────
     m1, m2, m3 = st.columns(3)
     m1.metric("Identifiers", len(candidates))
     m2.metric("Seed nodes",  len(seed_nodes))
     m3.metric("Subgraph",    len(subgraph["nodes"]))
-    token_ph = st.empty()
+
+    # Seed nodes + candidate files từ GraphRAG retriever
+    with st.expander(f"GraphRAG Results — {len(seed_nodes)} seed nodes, {len(candidate_files)} candidate files"):
+        if seed_nodes:
+            st.markdown("**Seed Nodes**")
+            for n in seed_nodes:
+                st.caption(f"`[{n['label']}]` **{n['name']}** — `{n['file']}:{n['start_line']}`")
+        if candidate_files:
+            st.markdown("**Candidate Files**")
+            for f in candidate_files:
+                icon = "🎯" if f in gt_files else "📄"
+                st.caption(f"{icon} `{f}`")
 
     st.divider()
 
-    # ── Predicted files placeholder + LLM stream ──────────────────────────────
-    col_a, col_b = st.columns([1, 1], gap="large")
+    # ── LLM Answer (stream trực tiếp) ─────────────────────────────────────────
+    st.markdown("**LLM Answer**")
+    meta = {}
+    if run_llm and context:
+        full_answer = st.write_stream(
+            generate_stream(issue_text, context, meta)
+        )
+    else:
+        full_answer = ""
+        st.info("LLM bị tắt hoặc không có context để gửi.")
 
-    with col_a:
-        st.markdown("**Predicted Files**")
-        files_ph   = st.empty()
-        metrics_ph = st.empty()
+    if meta:
+        t1, t2 = st.columns(2)
+        t1.metric("Input tokens",  meta.get("input_tokens", 0))
+        t2.metric("Output tokens", meta.get("output_tokens", 0))
+        reason = meta.get("finish_reason", "")
+        if reason and reason not in ("FinishReason.STOP", "STOP", "INTERRUPTED"):
+            st.warning(f"⚠️ finish_reason: `{reason}`")
 
-    with col_b:
-        st.markdown("**LLM Answer**")
-        meta = {}
-        if run_llm and context:
-            full_answer = st.write_stream(
-                generate_stream(issue_text, context, candidate_files, meta)
-            )
-        else:
-            full_answer = ""
-            st.info("LLM bị tắt hoặc không có context để gửi.")
+    st.divider()
 
-    # ── Fill placeholders after stream ────────────────────────────────────────
-    predicted_files = _extract_files_from_answer(full_answer) if full_answer else candidate_files
+    # ── Predicted Files (từ FILE: lines trong LLM answer) ────────────────────
+    st.markdown("**Predicted Files**")
+    predicted_files = extract_files_from_answer(full_answer) if full_answer else candidate_files
+
+    if not predicted_files:
+        st.warning("Không tìm được file nào.")
+    else:
+        lines = []
+        for f in predicted_files:
+            icon = _file_status_icon(f, gt_files, predicted_files)
+            lines.append(f"{icon}  `{f}`")
+        for f in gt_files:
+            if f not in predicted_files:
+                lines.append(f"🎯  `{f}` *(GT — missed)*")
+        st.markdown("\n\n".join(lines))
+
+    if gt_files and predicted_files:
+        tp        = len(set(predicted_files) & set(gt_files))
+        precision = tp / len(predicted_files) if predicted_files else 0
+        recall    = tp / len(gt_files) if gt_files else 0
+        f1        = (2 * precision * recall / (precision + recall)
+                     if (precision + recall) > 0 else 0)
+        mc1, mc2, mc3 = st.columns(3)
+        mc1.metric("Precision", f"{precision:.0%}")
+        mc2.metric("Recall",    f"{recall:.0%}")
+        mc3.metric("F1",        f"{f1:.0%}")
+
     llm_result = {
         "answer":          full_answer,
         "predicted_files": predicted_files,
@@ -164,41 +202,6 @@ def _render_query_results(
         "input_tokens":    meta.get("input_tokens", 0),
         "output_tokens":   meta.get("output_tokens", 0),
     } if run_llm else None
-
-    with files_ph.container():
-        if not predicted_files:
-            st.warning("Không tìm được file nào.")
-        else:
-            lines = []
-            for f in predicted_files:
-                icon = _file_status_icon(f, gt_files, predicted_files)
-                lines.append(f"{icon}  `{f}`")
-            for f in gt_files:
-                if f not in predicted_files:
-                    lines.append(f"🎯  `{f}` *(GT — missed)*")
-            st.markdown("\n\n".join(lines))
-
-    if gt_files and predicted_files:
-        tp        = len(set(predicted_files) & set(gt_files))
-        precision = tp / len(predicted_files) if predicted_files else 0
-        recall    = tp / len(gt_files) if gt_files else 0
-        f1 = (2 * precision * recall / (precision + recall)
-              if (precision + recall) > 0 else 0)
-        with metrics_ph.container():
-            st.divider()
-            mc1, mc2, mc3 = st.columns(3)
-            mc1.metric("Precision", f"{precision:.0%}")
-            mc2.metric("Recall",    f"{recall:.0%}")
-            mc3.metric("F1",        f"{f1:.0%}")
-
-    if meta:
-        with token_ph.container():
-            t1, t2 = st.columns(2)
-            t1.metric("Input tokens",  meta.get("input_tokens", 0))
-            t2.metric("Output tokens", meta.get("output_tokens", 0))
-            reason = meta.get("finish_reason", "")
-            if reason and reason not in ("FinishReason.STOP", "STOP", "INTERRUPTED"):
-                st.warning(f"⚠️ finish_reason: `{reason}`")
 
     # ── Cache for re-renders ───────────────────────────────────────────────────
     st.session_state["last_result"] = {
@@ -222,6 +225,7 @@ def _render_cached_results(gt_files: list[str]) -> None:
         seed_nodes      = r["seed_nodes"],
         subgraph_size   = r["subgraph_size"],
         predicted_files = r["predicted_files"],
+        candidate_files = r["candidate_files"],
         gt_files        = gt_files,
         llm_result      = r["llm_result"],
         context         = r["context"],
@@ -233,29 +237,47 @@ def _render_result_body(
     seed_nodes: list,
     subgraph_size: int,
     predicted_files: list[str],
+    candidate_files: list[str],
     gt_files: list[str],
     llm_result: dict | None,
     context: str,
 ) -> None:
-    """Render metrics, predicted files, LLM answer, debug expanders."""
+    """Render metrics, GraphRAG results, LLM answer, predicted files."""
 
-    # Metrics
     m1, m2, m3 = st.columns(3)
     m1.metric("Identifiers", len(candidates))
     m2.metric("Seed nodes",  len(seed_nodes))
     m3.metric("Subgraph",    subgraph_size)
 
+    with st.expander(f"GraphRAG Results — {len(seed_nodes)} seed nodes, {len(candidate_files)} candidate files"):
+        if seed_nodes:
+            st.markdown("**Seed Nodes**")
+            for n in seed_nodes:
+                st.caption(f"`[{n['label']}]` **{n['name']}** — `{n['file']}:{n['start_line']}`")
+        if candidate_files:
+            st.markdown("**Candidate Files**")
+            for f in candidate_files:
+                icon = "🎯" if f in gt_files else "📄"
+                st.caption(f"{icon} `{f}`")
+
+    st.divider()
+
+    # LLM Answer
+    st.markdown("**LLM Answer**")
     if llm_result:
+        st.markdown(llm_result["answer"])
         t1, t2 = st.columns(2)
         t1.metric("Input tokens",  llm_result["input_tokens"])
         t2.metric("Output tokens", llm_result["output_tokens"])
         reason = llm_result.get("finish_reason", "")
         if reason and reason not in ("FinishReason.STOP", "STOP", "INTERRUPTED"):
             st.warning(f"⚠️ finish_reason: `{reason}`")
+    else:
+        st.info("LLM bị tắt hoặc không có context để gửi.")
 
     st.divider()
 
-    # Predicted files
+    # Predicted Files
     st.markdown("**Predicted Files**")
     if not predicted_files:
         st.warning("Không tìm được file nào.")
@@ -273,31 +295,12 @@ def _render_result_body(
         tp        = len(set(predicted_files) & set(gt_files))
         precision = tp / len(predicted_files) if predicted_files else 0
         recall    = tp / len(gt_files) if gt_files else 0
-        f1 = (2 * precision * recall / (precision + recall)
-              if (precision + recall) > 0 else 0)
-        st.divider()
+        f1        = (2 * precision * recall / (precision + recall)
+                     if (precision + recall) > 0 else 0)
         mc1, mc2, mc3 = st.columns(3)
         mc1.metric("Precision", f"{precision:.0%}")
         mc2.metric("Recall",    f"{recall:.0%}")
         mc3.metric("F1",        f"{f1:.0%}")
-
-    # LLM answer
-    if llm_result:
-        st.divider()
-        st.markdown("**LLM Answer**")
-        st.markdown(llm_result["answer"])
-    else:
-        st.info("LLM bị tắt hoặc không có context để gửi.")
-
-    # Debug expanders
-    with st.expander(f"Identifiers ({len(candidates)})"):
-        st.write(candidates)
-
-    with st.expander(f"Seed nodes ({len(seed_nodes)})"):
-        for n in seed_nodes:
-            st.markdown(
-                f"**[{n['label']}]** `{n['name']}` — `{n['file']}:{n['start_line']}`"
-            )
 
     with st.expander(f"Context ({len(context)} chars)"):
         st.code(
