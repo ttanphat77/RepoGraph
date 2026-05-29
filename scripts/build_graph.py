@@ -41,13 +41,24 @@ from pipeline.repo_manager import clone_and_checkout, get_python_files, clone_fr
 from pipeline.ast_engine import ASTEngine
 from pipeline.schemas import load_schema
 from pipeline.neo4j_ingester import Neo4jIngester
-from pipeline.languages.python import python_extractor
-from pipeline.languages.swift import swift_extractor
 import config
 
+def _load_lang_config(lang: str) -> dict:
+    if lang == "python":
+        from pipeline.languages.python import python_extractor
+        return {"extractor": python_extractor, "extensions": (".py",)}
+    if lang == "swift":
+        from pipeline.languages.swift import swift_extractor
+        return {"extractor": swift_extractor, "extensions": (".swift",)}
+    if lang == "javascript":
+        from pipeline.languages.javascript import javascript_extractor
+        return {"extractor": javascript_extractor, "extensions": (".js", ".mjs", ".cjs")}
+    raise ValueError(f"Unsupported language: {lang}")
+
 LANG_CONFIG = {
-    "python": {"extractor": python_extractor, "extensions": (".py",)},
-    "swift":  {"extractor": swift_extractor,  "extensions": (".swift",)},
+    "python":     {"extensions": (".py",)},
+    "swift":      {"extensions": (".swift",)},
+    "javascript": {"extensions": (".js", ".mjs", ".cjs")},
 }
 
 logging.basicConfig(
@@ -102,7 +113,7 @@ def _parse_one_file(args: tuple) -> dict | None:
     """
     rel, repo_path, base_commit, schema_name, lang = args
     schema = load_schema(schema_name)
-    extractor = LANG_CONFIG[lang]["extractor"]
+    extractor = _load_lang_config(lang)["extractor"]
     engine = ASTEngine(
         file_path=str(Path(repo_path) / rel),
         repo_path=repo_path,

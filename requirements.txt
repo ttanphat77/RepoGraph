@@ -8,6 +8,8 @@ huggingface-hub==0.22.2
 # AST parsing
 tree-sitter==0.21.3
 tree-sitter-python==0.21.0
+tree-sitter-swift==0.7.2
+tree-sitter-javascript==0.21.4
 
 # Patch parsing
 unidiff==0.7.5

@@ -65,3 +65,21 @@ class LanguageExtractor:
     # How to detect "self" — either by text content or by node type
     self_keywords:   frozenset  # {"self", "cls"} — matched against node text
     self_node_type:  str        # "self_expression" (Swift) / "" (match by text)
+
+    # ── Module resolution (có default → Python/Swift không cần khai báo) ──────
+    # Extensions thử khi resolve import path thành file thật trên đĩa.
+    source_extensions: tuple[str, ...] = (".py",)
+    # Tên file "index" của package (không gồm extension). Python: __init__, JS: index
+    index_file_name: str = "__init__"
+
+    # ── Import style ──────────────────────────────────────────────────────────
+    # True → engine dùng JS import parser (ES6 import + CommonJS require)
+    # False → Python parser (import / from-import)
+    uses_js_imports: bool = False
+
+    # ── Anonymous function (lấy tên từ biến gán bên ngoài) ───────────────────
+    # vd JS: `const foo = () => {}` → arrow_function. Để rỗng nếu không áp dụng.
+    anon_function_types: tuple[str, ...] = ()
+
+    # ── Constructor call riêng (JS `new X()`); "" nếu ngôn ngữ không có ──────
+    new_expression_type: str = ""

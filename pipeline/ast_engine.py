@@ -78,6 +78,7 @@ class ASTEngine:
         repo_path: str,
         base_commit: str,
         schema: SchemaPlugin,
+        extractor=None,
     ):
         """
         Args:
@@ -86,6 +87,10 @@ class ASTEngine:
             base_commit: Commit hash hoặc "local" — prefix của mọi node ID
             schema:      SchemaPlugin instance quyết định label/edge type
         """
+        if extractor is None:
+            from pipeline.languages.python import python_extractor
+            extractor = python_extractor
+        self.extractor   = extractor
         self.file_path   = file_path
         self.repo_path   = repo_path
         self.base_commit = base_commit
@@ -137,7 +142,7 @@ class ASTEngine:
 
         # Parse AST
         try:
-            tree = _parser.parse(self._source)
+            tree = self.extractor.parser.parse(self._source)
         except Exception as e:
             logger.warning(f"tree-sitter error {self.file_path}: {e}")
             return None
@@ -190,7 +195,7 @@ class ASTEngine:
         Điều này đảm bảo nested class hoặc nested function có ID đúng.
         """
         for child in node.children:
-            if child.type == "class_definition":
+            if child.type in self.extractor.class_types:
                 # Schema quyết định label ("Class" hay "CLASS") và emit node
                 new_id = self.schema.on_class(child, ctx)
                 child_ctx = ParseContext(
@@ -210,7 +215,7 @@ class ASTEngine:
                 )
                 self._walk_definitions(child, child_ctx)
 
-            elif child.type in ("function_definition", "async_function_definition"):
+            elif child.type in self.extractor.function_types:
                 new_id = self.schema.on_function(child, ctx)
                 child_ctx = ParseContext(
                     module_id=ctx.module_id,
@@ -227,9 +232,56 @@ class ASTEngine:
                 )
                 self._walk_definitions(child, child_ctx)
 
+            elif self.extractor.anon_function_types and child.type in self.extractor.assignment_types:
+                # JS: `const foo = () => {}` — tên lấy từ variable_declarator
+                handled = False
+                for decl, body in self._iter_anon_func_decls(child):
+                    new_id = self.schema.on_function(decl, ctx)
+                    self._walk_definitions(
+                        body,
+                        self._child_ctx(ctx, new_id if new_id else ctx.parent_id),
+                    )
+                    handled = True
+                if not handled:
+                    self._walk_definitions(child, ctx)
+
             else:
                 # Với mọi node khác: tiếp tục đệ quy với context hiện tại
                 self._walk_definitions(child, ctx)
+
+    def _child_ctx(self, ctx: ParseContext, parent_id: str,
+                   current_class_id=..., in_class=...) -> ParseContext:
+        """Tạo context con chia sẻ output lists, chỉ đổi parent_id (và tùy chọn class)."""
+        return ParseContext(
+            module_id=ctx.module_id,
+            parent_id=parent_id,
+            in_class=ctx.in_class if in_class is ... else in_class,
+            is_module_scope=False,
+            current_class_id=ctx.current_class_id if current_class_id is ... else current_class_id,
+            nodes_out=ctx.nodes_out,
+            edges_out=ctx.edges_out,
+            call_refs_out=ctx.call_refs_out,
+            inherit_refs_out=ctx.inherit_refs_out,
+            instance_attr_types_out=ctx.instance_attr_types_out,
+            text_of=ctx.text_of,
+        )
+
+    def _iter_anon_func_decls(self, node: Node):
+        """
+        Yield (variable_declarator, body_node) cho mỗi declarator có value là
+        anon function (arrow_function / function_expression).
+
+        node có thể là variable_declarator trực tiếp, hoặc lexical_declaration /
+        variable_declaration chứa nhiều declarator.
+        """
+        declarators = (
+            [node] if node.type == "variable_declarator"
+            else [c for c in node.children if c.type == "variable_declarator"]
+        )
+        for decl in declarators:
+            value = decl.child_by_field_name("value")
+            if value is not None and value.type in self.extractor.anon_function_types:
+                yield decl, value
 
     # ── Pass 1a: imports ──────────────────────────────────────────────────────
 
@@ -237,10 +289,15 @@ class ASTEngine:
         """
         Duyệt toàn bộ AST (dùng DFS stack) để tìm import statements.
 
-        Xử lý hai dạng:
+        Python:
           - `import X [as Y]`      → emit Imports edge + ghi import_map
           - `from X import Y [as Z]` → emit Imports edge + ghi from_import_map
+        JS (uses_js_imports=True): delegate sang _walk_imports_js.
         """
+        if self.extractor.uses_js_imports:
+            self._walk_imports_js(node, ctx)
+            return
+
         for child in self._iter_all(node):
             if child.type == "import_statement":
                 # `import os`, `import django.db`, `import numpy as np`
@@ -330,6 +387,96 @@ class ASTEngine:
                     results.append((a, o))
         return results
 
+    def _walk_imports_js(self, node: Node, ctx: ParseContext) -> None:
+        """
+        Import walker cho JavaScript.
+
+          ES6:      import X from './m'  /  import { A, B as C } from './m'
+                    import * as NS from './m'
+          CommonJS: const X = require('./m')  /  const { A, B } = require('./m')
+        """
+        for child in self._iter_all(node):
+            if child.type == "import_statement":
+                self._parse_js_es6_import(child, ctx)
+            elif child.type == "variable_declarator":
+                self._parse_js_require(child, ctx)
+
+    def _parse_js_es6_import(self, stmt: Node, ctx: ParseContext) -> None:
+        """Parse ES6 import_statement → cập nhật import_map / from_import_map."""
+        src_node = stmt.child_by_field_name("source")
+        if not src_node:
+            return
+        mod_str = self._text(src_node).strip("'\"")
+        module_tid = self._resolve_module(mod_str)
+        if module_tid:
+            self.schema.on_import(module_tid, ctx)
+
+        for child in stmt.children:
+            if child.type != "import_clause":
+                continue
+            for sub in child.children:
+                if sub.type == "identifier" and module_tid:
+                    # import Default from '...'
+                    self.import_map[self._text(sub)] = module_tid
+                elif sub.type == "namespace_import" and module_tid:
+                    # import * as NS from '...'
+                    for n in sub.children:
+                        if n.type == "identifier":
+                            self.import_map[self._text(n)] = module_tid
+                elif sub.type == "named_imports":
+                    # import { A, B as C } from '...'
+                    for spec in sub.children:
+                        if spec.type != "import_specifier":
+                            continue
+                        name_node  = spec.child_by_field_name("name")
+                        alias_node = spec.child_by_field_name("alias")
+                        orig  = self._text(name_node) if name_node else None
+                        local = self._text(alias_node) if alias_node else orig
+                        if orig and local and module_tid:
+                            self.from_import_map[local] = f"{module_tid}:{orig}"
+
+    def _parse_js_require(self, decl: Node, ctx: ParseContext) -> None:
+        """
+        Parse CommonJS require:
+          const X = require('./m')        → import_map["X"]
+          const { A, B } = require('./m') → from_import_map["A"], ["B"]
+        """
+        value = decl.child_by_field_name("value")
+        if not value or value.type != self.extractor.call_type:
+            return
+        func = value.child_by_field_name("function")
+        if not func or self._text(func) != "require":
+            return
+        args = value.child_by_field_name("arguments")
+        if not args:
+            return
+        str_arg = next((c for c in args.children if c.type == "string"), None)
+        if not str_arg:
+            return
+        mod_str = self._text(str_arg).strip("'\"")
+        module_tid = self._resolve_module(mod_str)
+        if module_tid:
+            self.schema.on_import(module_tid, ctx)
+
+        name_node = decl.child_by_field_name("name")
+        if not name_node or not module_tid:
+            return
+
+        if name_node.type == "identifier":
+            self.import_map[self._text(name_node)] = module_tid
+        elif name_node.type == "object_pattern":
+            for spec in name_node.children:
+                if spec.type == "shorthand_property_identifier_pattern":
+                    orig = self._text(spec)
+                    self.from_import_map[orig] = f"{module_tid}:{orig}"
+                elif spec.type == "pair_pattern":
+                    key_node = spec.child_by_field_name("key")
+                    val_node = spec.child_by_field_name("value")
+                    orig  = self._text(key_node) if key_node else None
+                    local = self._text(val_node) if val_node else orig
+                    if orig and local:
+                        self.from_import_map[local] = f"{module_tid}:{orig}"
+
     def _resolve_module(self, module: str) -> str | None:
         """
         Tìm file .py tương ứng với tên module, trả về module_id nếu tồn tại.
@@ -356,12 +503,14 @@ class ASTEngine:
             # Absolute import: `django.db.models` → `django/db/models`
             parts = module.replace(".", "/")
 
-        # Thử cả dạng module.py và package/__init__.py
-        for candidate in (f"{parts}.py", f"{parts}/__init__.py"):
-            full = os.path.join(self.repo_path, candidate)
-            if os.path.exists(full):
-                rel = os.path.relpath(full, self.repo_path).replace("\\", "/")
-                return f"{self.base_commit}:{rel}"
+        # Thử mọi extension + dạng package/index theo cấu hình ngôn ngữ
+        idx = self.extractor.index_file_name
+        for ext in self.extractor.source_extensions:
+            for candidate in (f"{parts}{ext}", f"{parts}/{idx}{ext}"):
+                full = os.path.join(self.repo_path, candidate)
+                if os.path.exists(full):
+                    rel = os.path.relpath(full, self.repo_path).replace("\\", "/")
+                    return f"{self.base_commit}:{rel}"
 
         return None  # external library
 
@@ -381,12 +530,15 @@ class ASTEngine:
         Giúp resolve `x.method()` → TypeName.method().
         """
         for child in node.children:
-            if child.type == "class_definition":
+            if child.type in self.extractor.class_types:
                 name = self._field(child, "name")
                 class_id = f"{ctx.module_id}:{name}" if name else ctx.parent_id
 
                 # Thu thập superclass refs
-                supers = child.child_by_field_name("superclasses")
+                supers = (
+                    child.child_by_field_name(self.extractor.superclasses_field)
+                    if self.extractor.superclasses_field else None
+                )
                 if supers:
                     for arg in supers.children:
                         base = self._extract_base_name(arg)
@@ -413,7 +565,7 @@ class ASTEngine:
                 )
                 self._collect_refs(child, child_ctx, local_types={})
 
-            elif child.type in ("function_definition", "async_function_definition"):
+            elif child.type in self.extractor.function_types:
                 name    = self._field(child, "name")
                 func_id = f"{ctx.parent_id}:{name}" if name else ctx.parent_id
 
@@ -436,29 +588,67 @@ class ASTEngine:
                 )
                 self._collect_refs(child, child_ctx, func_locals)
 
-            elif child.type == "call":
+            elif child.type == self.extractor.call_type:
                 self._handle_call(child, ctx, local_types)
                 # Tiếp tục duyệt trong call (có thể có call lồng nhau)
                 self._collect_refs(child, ctx, local_types)
 
-            elif child.type in ("assignment", "annotated_assignment", "expression_statement"):
-                # Xử lý assignment để cập nhật local_types và emit FIELD/GLOBAL_VAR
-                target_node = child
-                if child.type == "expression_statement" and child.child_count > 0:
-                    if child.children[0].type == "assignment":
-                        target_node = child.children[0]
-
-                if target_node.type == "assignment":
-                    self._collect_local_assignment(target_node, ctx, local_types)
-                elif target_node.type == "annotated_assignment":
-                    self._collect_ann_assignment(target_node, local_types)
-
-                # Cho schema emit FIELD/GLOBAL_VARIABLE nếu cần
-                self.schema.on_assignment(target_node, ctx)
-                self._collect_refs(child, ctx, local_types)
+            elif child.type in self.extractor.assignment_types:
+                self._collect_assignment(child, ctx, local_types)
 
             else:
                 self._collect_refs(child, ctx, local_types)
+
+    def _collect_assignment(
+        self, node: Node, ctx: ParseContext, local_types: dict[str, str]
+    ) -> None:
+        """
+        Xử lý assignment trong Pass 1b cho cả Python lẫn JS.
+
+          Python  : assignment / annotated_assignment (có thể bọc expression_statement)
+          JS arrow: `const foo = () => {}` → đi vào body với parent_id của hàm
+          JS khác : variable_declarator / assignment_expression → cập nhật local_types
+        """
+        # Python: unwrap expression_statement → assignment
+        target = node
+        if node.type == "expression_statement" and node.child_count > 0:
+            if node.children[0].type in ("assignment", "annotated_assignment"):
+                target = node.children[0]
+
+        if target.type == "assignment":
+            self._collect_local_assignment(target, ctx, local_types)
+            self.schema.on_assignment(target, ctx)
+            self._collect_refs(node, ctx, local_types)
+            return
+        if target.type == "annotated_assignment":
+            self._collect_ann_assignment(target, local_types)
+            self.schema.on_assignment(target, ctx)
+            self._collect_refs(node, ctx, local_types)
+            return
+
+        # JS: arrow/function-expression gán cho biến → body thuộc về hàm đó
+        anon = list(self._iter_anon_func_decls(node)) if self.extractor.anon_function_types else []
+        if anon:
+            for decl, body in anon:
+                nm = decl.child_by_field_name("name")
+                name = self._text(nm) if nm else ""
+                func_id = f"{ctx.parent_id}:{name}" if name else ctx.parent_id
+                self._collect_refs(body, self._child_ctx(ctx, func_id), local_types.copy())
+            return
+
+        # JS: variable_declarator(s) value thường (vd const x = new Foo())
+        declarators = [c for c in node.children if c.type == "variable_declarator"]
+        if node.type == "variable_declarator":
+            declarators = [node]
+        for decl in declarators:
+            self._collect_local_assignment(decl, ctx, local_types)
+
+        # JS: this.x = new Foo() (assignment_expression)
+        if node.type == "assignment_expression":
+            self._collect_local_assignment(node, ctx, local_types)
+
+        self.schema.on_assignment(node, ctx)
+        self._collect_refs(node, ctx, local_types)
 
     def _handle_call(
         self, call_node: Node, ctx: ParseContext, local_types: dict[str, str]
@@ -490,7 +680,7 @@ class ASTEngine:
 
         Trả về None cho built-ins và call phức tạp không resolve được.
         """
-        func = call_node.child_by_field_name("function")
+        func = call_node.child_by_field_name(self.extractor.call_function_field)
         if func is None:
             return None
 
@@ -501,33 +691,46 @@ class ASTEngine:
             "file":      self.rel_path,
         }
 
-        if func.type == "identifier":
+        if func.type == self.extractor.identifier_type:
             # Trường hợp đơn giản: foo()
             name = self._text(func)
-            if name in _BUILTINS:
+            if name in self.extractor.builtins:
                 return None  # bỏ qua built-in calls
             return {**base, "kind": "simple", "name": name}
 
-        if func.type == "attribute":
-            obj  = func.child_by_field_name("object")
-            attr = func.child_by_field_name("attribute")
+        if func.type == self.extractor.attribute_type:
+            obj  = func.child_by_field_name(self.extractor.attribute_object_field)
+            attr = func.child_by_field_name(self.extractor.attribute_attr_field)
             if obj is None or attr is None:
                 return None
-            attr_name = self._text(attr)
-            if attr_name in _BUILTINS:
+            # Một số ngôn ngữ (Swift) nest tên method thêm một cấp trong attr node
+            if self.extractor.attr_name_subfield:
+                attr_name_node = attr.child_by_field_name(self.extractor.attr_name_subfield)
+                attr_name = self._text(attr_name_node) if attr_name_node else self._text(attr)
+            else:
+                attr_name = self._text(attr)
+            if attr_name in self.extractor.builtins:
                 return None
 
             obj_text = self._text(obj)
 
-            if obj_text in ("self", "cls"):
-                # self.method() — resolve trong class scope
+            is_self = (
+                obj_text in self.extractor.self_keywords or
+                (self.extractor.self_node_type and obj.type == self.extractor.self_node_type)
+            )
+            if is_self:
+                # self.method() / this.method() — resolve trong class scope
                 return {**base, "kind": "self_method", "name": attr_name, "class_id": current_class_id}
 
-            if obj.type == "attribute":
+            if obj.type == self.extractor.attribute_type:
                 # self.x.method() — cần biết type của self.x
-                inner_obj  = obj.child_by_field_name("object")
-                inner_attr = obj.child_by_field_name("attribute")
-                if inner_obj and inner_attr and self._text(inner_obj) in ("self", "cls"):
+                inner_obj  = obj.child_by_field_name(self.extractor.attribute_object_field)
+                inner_attr = obj.child_by_field_name(self.extractor.attribute_attr_field)
+                inner_is_self = inner_obj and (
+                    self._text(inner_obj) in self.extractor.self_keywords or
+                    (self.extractor.self_node_type and inner_obj.type == self.extractor.self_node_type)
+                )
+                if inner_is_self and inner_attr:
                     return {
                         **base,
                         "kind":     "self_attr_method",
@@ -556,37 +759,54 @@ class ASTEngine:
              để resolve `self.x.method()` sau này
           2. `x = TypeName(...)` → ghi vào local_types cho scope hiện tại
         """
-        left  = node.child_by_field_name("left")
-        right = node.child_by_field_name("right")
-        if left is None or right is None or right.type != "call":
+        # Field name khác nhau giữa các ngôn ngữ:
+        #   Python assignment / JS assignment_expression → left / right
+        #   JS variable_declarator                       → name / value
+        left  = node.child_by_field_name("left")  or node.child_by_field_name("name")
+        right = node.child_by_field_name("right") or node.child_by_field_name("value")
+        if left is None or right is None:
             return
 
-        func = right.child_by_field_name("function")
-        if func is None:
+        is_call = right.type == self.extractor.call_type
+        is_new  = bool(self.extractor.new_expression_type) and right.type == self.extractor.new_expression_type
+        if not is_call and not is_new:
             return
 
-        # Trích tên type: `TypeName(...)` hoặc `module.TypeName(...)`
+        # Trích tên type từ vế phải
         type_name = None
-        if func.type == "identifier":
-            type_name = self._text(func)
-        elif func.type == "attribute":
-            type_attr = func.child_by_field_name("attribute")
-            type_name = self._text(type_attr) if type_attr else None
+        if is_new:
+            # JS: new TypeName(...) — field "constructor" chứa identifier
+            ctor = right.child_by_field_name("constructor")
+            if ctor and ctor.type == self.extractor.identifier_type:
+                type_name = self._text(ctor)
+        else:
+            func = (
+                right.child_by_field_name(self.extractor.call_function_field)
+                if self.extractor.call_function_field
+                else (right.children[0] if right.child_count else None)
+            )
+            if func is None:
+                return
+            if func.type == self.extractor.identifier_type:
+                type_name = self._text(func)
+            elif func.type == self.extractor.attribute_type:
+                attr = func.child_by_field_name(self.extractor.attribute_attr_field)
+                type_name = self._text(attr) if attr else None
 
-        if not type_name or type_name in _BUILTINS:
-            return  # bỏ qua `x = list()`, `x = dict()`, ...
+        if not type_name or type_name in self.extractor.builtins:
+            return  # bỏ qua `x = list()`, `new Array()`, ...
 
-        if left.type == "attribute" and ctx.current_class_id:
-            # self.x = TypeName(...) trong class
-            obj_node  = left.child_by_field_name("object")
-            attr_node = left.child_by_field_name("attribute")
-            if obj_node and attr_node and self._text(obj_node) in ("self", "cls"):
+        if left.type == self.extractor.attribute_type and ctx.current_class_id:
+            # self.x = TypeName(...) / this.x = new TypeName(...)
+            obj_node  = left.child_by_field_name(self.extractor.attribute_object_field)
+            attr_node = left.child_by_field_name(self.extractor.attribute_attr_field)
+            if obj_node and attr_node and self._text(obj_node) in self.extractor.self_keywords:
                 ctx.instance_attr_types_out.append({
                     "class_id":  ctx.current_class_id,
                     "attr":      self._text(attr_node),
                     "type_name": type_name,
                 })
-        elif left.type == "identifier":
+        elif left.type == self.extractor.identifier_type:
             # x = TypeName(...) — ghi vào local scope hiện tại
             local_types[self._text(left)] = type_name
 

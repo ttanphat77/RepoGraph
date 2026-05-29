@@ -110,22 +110,38 @@ def get_python_files(repo_path: str) -> list[str]:
 
 def get_source_files(repo_path: str, extensions: tuple[str, ...]) -> list[str]:
     """
-    Liệt kê tất cả file có extension trong extensions, trả về đường dẫn tương đối.
+    Liệt kê file có extension trong extensions, trả về đường dẫn tương đối.
 
-    Bỏ qua thư mục .git/ để không parse metadata của git.
+    Dùng `git ls-files` nếu repo_path là git repo (tự động lọc theo .gitignore).
+    Fallback về os.walk (bỏ qua .git/) nếu không phải git repo.
     """
-    result = []
+    import subprocess
     base_path = Path(repo_path)
 
+    try:
+        out = subprocess.check_output(
+            ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
+            cwd=str(base_path),
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        return [
+            line
+            for line in out.splitlines()
+            if any(line.endswith(ext) for ext in extensions)
+        ]
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    # fallback: không phải git repo
+    result = []
     for root, _, files in os.walk(base_path):
         if ".git" in root:
             continue
         for file in files:
             if any(file.endswith(ext) for ext in extensions):
                 full_path = Path(root) / file
-                rel_path = full_path.relative_to(base_path)
-                result.append(str(rel_path).replace("\\", "/"))
-
+                result.append(str(full_path.relative_to(base_path)).replace("\\", "/"))
     return result
 
 

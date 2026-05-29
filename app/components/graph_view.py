@@ -96,7 +96,7 @@ def _build_rels_js() -> str:
     return "{" + ", ".join(parts) + "}"
 
 
-def _render_neovis(cypher: str, query_seed_ids: list = None, query_sub_ids: list = None, height: int = 900) -> None:
+def _render_neovis(cypher: str, query_seed_ids: list = None, query_sub_ids: list = None, height: int = 1100) -> None:
     """
     Tạo và render NeoVis graph trong iframe Streamlit.
 
@@ -236,6 +236,10 @@ def _render_neovis(cypher: str, query_seed_ids: list = None, query_sub_ids: list
     <label class="tog">
       <input type="checkbox" id="communityMode">
       <span>Hiện Communities</span>
+    </label>
+    <label class="tog">
+      <input type="checkbox" id="physicsMode" checked>
+      <span>Physics (tự dàn layout)</span>
     </label>
 
     <hr class="divider">
@@ -403,6 +407,10 @@ def _render_neovis(cypher: str, query_seed_ids: list = None, query_sub_ids: list
 
     document.getElementById('dimMode').addEventListener('change', applyState);
     document.getElementById('communityMode').addEventListener('change', rebuildBaseColors);
+    // Bật/tắt physics theo ý người dùng: tick = tự dàn layout, bỏ tick = đóng băng vị trí.
+    document.getElementById('physicsMode').addEventListener('change', function() {{
+      if (_network) _network.setOptions({{ physics: this.checked }});
+    }});
 
     /* ── NeoVis initialization ──────────────────────────────────────────── */
     const viz = new NeoVis.default({{
@@ -690,9 +698,8 @@ def render_graph_view():
         st.warning("Không có dữ liệu trong Neo4j.")
         return
 
-    # LIMIT 2000: với repo lớn (vd: Django), full graph có thể hàng chục nghìn node
-    # NeoVis/vis-network bắt đầu lag rõ khi >2000 node do physics simulation
-    cypher = "MATCH (n)-[r]->(m) RETURN n, r, m LIMIT 2000"
+    # Lấy toàn bộ đồ thị — không cắt dữ liệu.
+    cypher = "MATCH (n)-[r]->(m) RETURN n, r, m"
 
     seed_ids = st.session_state.get("query_seed_ids", [])
     sub_ids  = st.session_state.get("query_subgraph_ids", [])

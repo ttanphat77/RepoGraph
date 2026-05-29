@@ -57,8 +57,8 @@ def render_combined_view() -> None:
     # ── Graph (full width, chiều cao cố định) ────────────────────────────────
     seed_ids = st.session_state.get("query_seed_ids", [])
     sub_ids  = st.session_state.get("query_subgraph_ids", [])
-    cypher   = "MATCH (n)-[r]->(m) RETURN n, r, m LIMIT 2000"
-    _render_neovis(cypher, query_seed_ids=seed_ids, query_sub_ids=sub_ids, height=520)
+    cypher   = "MATCH (n)-[r]->(m) RETURN n, r, m"
+    _render_neovis(cypher, query_seed_ids=seed_ids, query_sub_ids=sub_ids, height=700)
 
     st.divider()
 
