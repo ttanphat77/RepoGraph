@@ -1,6 +1,6 @@
 # Kế hoạch RepoGraph: từ việc 1.2 đến hết giai đoạn 2
 
-Cập nhật ngày 15/10/2026.
+Cập nhật ngày 18/10/2026.
 
 File này gom toàn bộ kế hoạch đang làm vào một chỗ. Nó thay cho file cũ `~/.claude/plans/partitioned-sprouting-stardust.md`. File cũ chỉ có 4 hệ thống và chưa có nguồn ISSUE. Phần mở đầu của file cũ còn ghi sai mục tiêu, vì nó coi quy trình debug là mục tiêu của đề tài.
 
@@ -61,9 +61,9 @@ V4 trên Django và SymPy vẫn là **thực nghiệm khám phá**. Thực nghi�
 
 | Giai đoạn | Việc | Trạng thái |
 |---|---|---|
-| 0 | Viết đúng những gì đã chứng minh được trong `research_context.md` | Xong, chưa commit |
-| 1.1 | Sửa oracle rồi đếm lại trên 1.006 bản vá và trên cạnh history | Xong trên bản làm việc, chưa áp vào notebook thật |
-| 1.2 | Tính lại v3 với oracle đã sửa, xếp hạng tới 500 và quy tắc thống kê thống nhất | Chưa làm |
+| 0 | Viết đúng những gì đã chứng minh được trong `research_context.md` | Xong, đã commit ở `1f81c55` |
+| 1.1 | Sửa oracle rồi đếm lại trên 1.006 bản vá và trên cạnh history | Xong, đã áp vào notebook ở `1f81c55` và chạy ở lượt 1 trên Kaggle (16/10/2026) |
+| 1.2 | Tính lại v3 với oracle đã sửa, xếp hạng tới 500 và quy tắc thống kê thống nhất | Xong ở lượt 1 (cell `v3-recheck`). Kết luận hẹp giữ nguyên: Top@10 tăng từ 55,5% (AST) lên 61,2% (DOC+HIST). Chi tiết ở mục 9.1 của `research_context.md` |
 | 1.3 | Kiểm tra snapshot trên 100 instance | Chưa làm |
 | 1.5 | Tìm hiểu bài báo và khả năng lấy dữ liệu cho ISSUE | Xong, đã báo cáo |
 | 2 | Hoàn thiện v4 rồi đóng băng | Chưa làm |
@@ -227,7 +227,7 @@ HIST xếp hạng hàm/lớp theo Locus (Wen, Wu, Cheung, ASE 2016). LLM không 
 
 **Cài đặt.** Cell `hist-proc` lấy `git diff -U3 -w` của mọi đơn vị có touch set khác rỗng, tách thành hunk, rồi gán mỗi hunk cho các hàm/lớp mà nó đổi bằng oracle mới. Kết quả ghi vào `history/<repo>_hunks_v2.jsonl`, ước tính 65 nghìn hunk (Django) và 55 nghìn hunk (SymPy). File history và graph không đổi.
 
-**Output.** Mỗi dòng của `scale_rows_v4.jsonl` có thêm `doc_ids_hist_locus`, `doc_score_hist_locus`, `doc_r_hist_locus` và `doc_gold_hist_locus`, theo cùng dạng mà `fused_multi` đọc. Danh sách giữ 500 hàm/lớp đầu, bằng độ sâu của xếp hạng AST. Hàm/lớp không có trong graph của snapshot bị bỏ. Mỗi dòng cũng ghi hunk tốt nhất của 10 hàm/lớp đầu, để judge chấm.
+**Output.** Mỗi dòng của `scale_rows_v4.jsonl` có thêm `doc_ids_hist_locus`, `doc_score_hist_locus`, `doc_r_hist_locus` và `doc_gold_hist_locus`, theo cùng dạng mà `fused_multi` đọc. Danh sách giữ 500 hàm/lớp đầu, bằng độ sâu của xếp hạng AST. Hàm/lớp không có trong graph của snapshot bị bỏ. Mỗi dòng cũng ghi hunk tốt nhất của 10 hàm/lớp đầu, để judge chấm. Số lượng cố định này sẽ được thay bằng ngưỡng (mục 6.11).
 
 Thiết kế `hist-llm` cũ đã bị bỏ. Trong thiết kế đó, LLM viết ý đồ của từng commit, nêu giả thuyết nguyên nhân lỗi, rồi liệt kê hàm/lớp để trộn với AST. Thiết kế này trái với vai trò của LLM, vì LLM chỉ là judge.
 
@@ -270,7 +270,7 @@ Tôi chọn TF-IDF cosine thay cho BM25. ExpeRepair thấy BM25 tốt hơn, như
 
 OM-RAG chỉ loại bản ghi của chính issue và không lọc theo thời gian. Lingxi và KGCompass lọc theo thời gian tạo. Vì vậy bộ lọc của chúng ta theo Lingxi và KGCompass, và chặt hơn nhờ điều kiện tổ tiên.
 
-**Output.** Mỗi dòng có danh sách hàm/lớp xếp theo SimiScore, ở dạng mà `fused_multi` đọc được. Mỗi dòng cũng có 5 báo cáo cũ có sim cao nhất và Fix không rỗng, để judge chấm. Số 5 bằng số chunk mà DOC dùng. Ngoài ra, cell ghi mức trần ISSUE sau khi lọc, trên cả 1.186 instance.
+**Output.** Mỗi dòng có danh sách hàm/lớp xếp theo SimiScore, ở dạng mà `fused_multi` đọc được. Mỗi dòng cũng có 5 báo cáo cũ có sim cao nhất và Fix không rỗng, để judge chấm. Số 5 bằng số chunk mà DOC dùng. Số lượng cố định này sẽ được thay bằng ngưỡng (mục 6.11). Ngoài ra, cell ghi mức trần ISSUE sau khi lọc, trên cả 1.186 instance.
 
 ### 6.6 Trộn
 
@@ -306,6 +306,8 @@ Các lựa chọn này có cơ sở như sau.
 Judge thấy toàn văn của mọi phần tử, kể cả DocChunk. Nếu có phần tử dài bất thường, tôi đo phân bố độ dài trong lúc kiểm thử trên máy, rồi báo bạn trước khi đặt bất kỳ giới hạn nào.
 
 Khóa của mỗi nhãn có hash của input. Nhờ vậy nhãn cũ không bị dùng nhầm khi nội dung đã đổi.
+
+**Loại thông tin (thêm ngày 18/10/2026).** Mỗi phần tử bằng chứng có thêm một trường ghi loại thông tin mà nó cung cấp. Danh sách loại chưa chốt (mục 6.11).
 
 ### 6.8 Phân tích (`verify-v4`)
 
@@ -359,6 +361,20 @@ Hiện có hai vấn đề đã đo được.
 - Có chunk nhắc tên gold nhưng không có cạnh.
 
 Việc này chưa có thiết kế chi tiết. Tôi sẽ viết thiết kế riêng, có cơ sở từ bài báo, sau khi xong các cell HIST và ISSUE. Thiết kế đó được gửi để bạn xác nhận trước khi làm.
+
+### 6.11 Định hướng sau thảo luận ngày 18/10/2026
+
+Phần này ghi các quyết định của buổi thảo luận ngày 18/10/2026. Bối cảnh nằm ở mục 12 của `research_context.md`.
+
+**Agent và judge.** Thực nghiệm hiện tại chưa dùng agent. LLM judge đánh giá các node output, tức các node sau này sẽ được đưa cho agent. Agent sẽ được dùng sau để kiểm chứng hiệu quả.
+
+**Output theo loại.** Output gồm AST node và các node bằng chứng (chunk doc, issue cũ, hunk). Mỗi loại là một phần riêng của output.
+
+**Ngưỡng thay cho số lượng cố định.** Số lượng cố định hiện tại (5 chunk doc, 5 issue cũ, 10 hunk) sẽ được thay bằng ngưỡng. Ngưỡng có thể dùng ở ba chỗ: trước khi hop, trước khi vote và trước khi output. Lý do là số issue cũ liên quan thay đổi theo instance. Có instance có 5 đến 10 issue liên quan, có instance không có issue nào, và khi đó đưa đủ 5 issue không liên quan làm loãng context. Điểm embedding và điểm TF-IDF là cosine, có thang cố định, nên đặt được ngưỡng tuyệt đối. BM25 và RRF không có thang cố định. Cách chọn ngưỡng chưa chốt, và sẽ được chọn từ bài báo hoặc kỹ thuật liên quan.
+
+**Khung so sánh.** Giữ toàn bộ khung so sánh với AST, gồm các mức hop và các cách kết hợp nguồn. Câu hỏi giữ nguyên Q1 đến Q7 ở mục 6.2.
+
+**Judge bằng chứng có thêm loại thông tin.** Ngoài điểm liên quan và điểm hữu ích, judge ghi loại thông tin mà phần tử cung cấp. Danh sách loại chưa chốt.
 
 ---
 

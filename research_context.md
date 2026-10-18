@@ -1,6 +1,6 @@
 # Bối cảnh nghiên cứu RepoGraph
 
-File này được cập nhật ngày 2026-10-16. File tóm tắt toàn bộ trạng thái nghiên cứu hiện tại.
+File này được cập nhật ngày 2026-10-18. File tóm tắt toàn bộ trạng thái nghiên cứu hiện tại.
 Notebook chính là `colab/build_graph_flask_colab.ipynb`. Notebook được chạy trên Kaggle.
 
 Có hai lượt thực nghiệm đã chạy xong và một lượt đang chạy:
@@ -8,6 +8,7 @@ Có hai lượt thực nghiệm đã chạy xong và một lượt đang chạy:
 - **Lượt v2** chạy trên 12 repo của SWE-bench. Kết quả nằm trong `scale_rows_v2.jsonl` và thư mục `judge/`.
 - **Lượt v3** chạy trên django và sympy, có thêm lớp git history và judge mới. Lượt này **đã chạy xong trên Kaggle**. Kết quả nằm ở mục 7.9. Các vấn đề phát hiện sau lượt này nằm ở mục 7.10.
 - **Lượt v4** đang chạy. Lượt 1 trên Kaggle đã xong ngày 16/10/2026, và kết quả nằm ở mục 9.1. HIST theo Locus đã có danh sách xếp hạng, nhưng chưa được trộn với AST. ISSUE đã có dữ liệu cào (mục 9.2), nhưng chưa được cài đặt.
+- **Định hướng đề tài** sau buổi thảo luận ngày 18/10/2026 nằm ở mục 12.
 
 ---
 
@@ -555,3 +556,21 @@ Cơ sở là graph của Abedu và cộng sự (TOSEM), với các cạnh Fixed 
 25. Lượt 1 của v4 xác nhận kết luận hẹp với oracle mới.
 26. Mục tiêu chính không phải tìm nguồn mạnh nhất, nhưng các nguồn vẫn được so với nhau để thống kê và điều chỉnh.
 27. Trong graph, commit và issue cũ được gom vào nhóm History. Node của issue cũ tên là Issue.
+28. Chủ đề được hiểu là truy xuất ngữ cảnh. Agent sẽ được dùng để kiểm chứng hiệu quả, nhưng thực nghiệm hiện tại chưa dùng agent. LLM judge đánh giá các node output sẽ được dùng cho agent sau này.
+29. Giá trị chính của doc, issue cũ và history là ngữ nghĩa, thông tin và ngữ cảnh mà node cung cấp. Judge chấm nội dung này, không dùng để so với gold.
+30. Node doc, issue cũ và hunk là output, không chỉ là phiếu bầu cho AST. Output được ghép theo loại.
+31. Graph liên kết các node: đưa vào kết quả node mà search không với tới, và ưu tiên node bằng chứng có liên kết với AST node đã truy hồi. AST node cũng hop ra node khác.
+32. Dùng ngưỡng thay cho số lượng cố định, ở ba chỗ: trước khi hop, trước khi vote và trước khi output. Cách chọn ngưỡng sẽ được tìm hiểu từ bài báo.
+33. Giữ toàn bộ khung so sánh với AST, gồm các mức hop và các cách kết hợp nguồn. Giữ Q1 đến Q7.
+34. Judge bằng chứng ghi thêm loại thông tin mà phần tử cung cấp.
+35. Định hướng của các quyết định 28 đến 34 nằm ở mục 12.
+
+## 12. Định hướng đề tài (thảo luận ngày 18/10/2026)
+
+- **Chủ đề và vai trò của agent.** Chủ đề là truy xuất ngữ cảnh. Mục tiêu là hỗ trợ AI agent, nên agent sẽ được dùng để kiểm chứng hiệu quả. Thực nghiệm hiện tại chưa dùng agent. LLM judge đánh giá các node output, tức các node sau này sẽ được đưa cho agent.
+- **Giá trị của các nguồn.** Giá trị chính của doc, issue cũ và history là ngữ nghĩa, thông tin và ngữ cảnh mà node cung cấp. Judge chấm nội dung đó. Judge không được dùng để so với gold.
+- **Output.** Ở các lượt đầu, output là AST node, và kết quả được so với gold function/module. Từ khi có judge, node doc, issue cũ và hunk cũng là output. Chúng cung cấp thêm thông tin cho judge, và sau này cho agent. Output được ghép theo loại, mỗi loại là một phần riêng.
+- **Vai trò của graph.** Graph liên kết các node. Khi kết quả search không với tới node cần thiết, quan hệ giữa các node đưa node đó vào kết quả truy hồi. Ví dụ, search được một AST node và nhiều hist node, thì hist node có liên kết với AST node đó được ưu tiên hơn. AST node cũng hop ra các node khác.
+- **Ngưỡng.** Ngưỡng thay cho số lượng cố định, và có thể dùng ở ba chỗ: trước khi hop, trước khi vote và trước khi output. Lý do là một instance có thể có 5 đến 10 issue cũ liên quan, hoặc không có issue nào. Khi đó đưa đủ 5 issue không liên quan làm loãng context. Theo ước lượng ở mục 9.2, mức trần của ISSUE sau khi lọc là 83,7% (Django) và 66,9% (SymPy), nên một phần đáng kể instance không có issue cũ nào nối tới gold. Điểm embedding và điểm TF-IDF là cosine, có thang cố định, nên đặt được ngưỡng tuyệt đối. BM25 và RRF không có thang cố định. Cách chọn ngưỡng sẽ được tìm hiểu từ bài báo hoặc kỹ thuật liên quan.
+- **Khung so sánh.** Giữ toàn bộ khung so sánh với AST, gồm các mức hop và các cách kết hợp nguồn. Câu hỏi giữ nguyên Q1 đến Q7 (mục 6.2 của `planning.md`).
+- **Judge bằng chứng.** Ngoài điểm liên quan và điểm hữu ích, judge ghi thêm loại thông tin mà phần tử cung cấp. Danh sách loại chưa chốt.
