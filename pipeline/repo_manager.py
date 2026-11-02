@@ -24,6 +24,16 @@ import config
 
 logger = logging.getLogger(__name__)
 
+# Bộ lọc file nguồn (mục 2.1 pipeline_design.md): graph chỉ chứa code "thật".
+# Bỏ file nằm trong thư mục test/example/benchmark/docs ở bất kỳ cấp nào, và file cấu hình.
+_SKIP_DIRS  = {"tests", "test", "examples", "example", "benchmarks", "docs"}
+_SKIP_FILES = {"conftest.py", "setup.py"}
+
+
+def index_dir_of(repo_path: str) -> Path:
+    """Thư mục dữ liệu chấm điểm của repo: {INDEX_ROOT}/{tên thư mục repo}."""
+    return Path(config.INDEX_ROOT) / Path(repo_path).resolve().name
+
 
 def get_repo_path(repo_name: str, base_commit: str) -> str:
     """
@@ -114,6 +124,7 @@ def get_source_files(repo_path: str, extensions: tuple[str, ...]) -> list[str]:
 
     Dùng `git ls-files` nếu repo_path là git repo (tự động lọc theo .gitignore).
     Fallback về os.walk (bỏ qua .git/) nếu không phải git repo.
+    Kết quả đã qua bộ lọc _SKIP_DIRS / _SKIP_FILES.
     """
     import subprocess
     base_path = Path(repo_path)
@@ -125,11 +136,11 @@ def get_source_files(repo_path: str, extensions: tuple[str, ...]) -> list[str]:
             stderr=subprocess.DEVNULL,
             text=True,
         )
-        return [
+        return filter_source_files([
             line
             for line in out.splitlines()
             if any(line.endswith(ext) for ext in extensions)
-        ]
+        ])
     except (subprocess.CalledProcessError, FileNotFoundError):
         pass
 
@@ -142,6 +153,25 @@ def get_source_files(repo_path: str, extensions: tuple[str, ...]) -> list[str]:
             if any(file.endswith(ext) for ext in extensions):
                 full_path = Path(root) / file
                 result.append(str(full_path.relative_to(base_path)).replace("\\", "/"))
+    return filter_source_files(result)
+
+
+def filter_source_files(paths: list[str]) -> list[str]:
+    """
+    Bỏ file nằm trong thư mục test/example/benchmark/docs (ở bất kỳ cấp nào)
+    và các file cấu hình conftest.py, setup.py.
+
+    Ví dụ: "tests/test_app.py" và "src/pkg/examples/demo.py" bị bỏ,
+    "src/flask/app.py" được giữ.
+    """
+    result = []
+    for p in paths:
+        parts = p.replace("\\", "/").split("/")
+        if any(part in _SKIP_DIRS for part in parts[:-1]):
+            continue
+        if parts[-1] in _SKIP_FILES:
+            continue
+        result.append(p)
     return result
 
 

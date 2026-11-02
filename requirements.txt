@@ -19,6 +19,18 @@ streamlit==1.33.0
 pyvis==0.3.2
 pandas==2.2.2
 
+# Embedding (bge-small-en-v1.5) cho Function/Class/DocChunk
+numpy
+sentence-transformers
+
+# Xếp hạng AST (BM25Okapi, k1 = 1.5, b = 0.75)
+rank_bm25==0.2.2
+
+# HIST (Locus, hist-msg): TF-IDF thưa, stop word, Porter
+scipy
+scikit-learn
+nltk==3.9.1
+
 # Community detection
 leidenalg
 igraph

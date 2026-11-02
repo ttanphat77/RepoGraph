@@ -66,6 +66,57 @@ COMMUNITY_EDGE_WEIGHTS: dict[str, float] = {
     "HAS_FIELD": 0.3,  # class chứa field (rất lỏng)
 }
 
+# ── Index đa nguồn ───────────────────────────────────────────────────────────
+# Dữ liệu chấm điểm (embedding, history, issue) của mỗi repo nằm ở
+# {INDEX_ROOT}/{tên thư mục repo}/. Graph (node, cạnh) nằm trong Neo4j.
+INDEX_ROOT = "cache"
+
+# ── Embedding (mục 2.1 pipeline_design.md) ────────────────────────────────────
+# Function/Class: EMBED_CODE_CHARS ký tự đầu của source. DocChunk: heading + nội dung.
+# Vector được chuẩn hóa, nên tích vô hướng là cosine.
+EMBED_MODEL_ID   = "BAAI/bge-small-en-v1.5"
+EMBED_CODE_CHARS = 2000
+EMBED_BATCH      = 64
+EMBED_FP16       = True   # chỉ có tác dụng khi có GPU (CUDA); CPU luôn chạy float32
+EMBED_QUERY_CHARS = 2000  # query bỏ khối ``` rồi cắt ở đây (bge-small nhận tối đa 512 token)
+
+# ── Xếp hạng (mục 4, 8 pipeline_design.md) ───────────────────────────────────
+# RRF của Cormack, Clarke, Büttcher (SIGIR 2009): score = Σ 1/(RRF_K + hạng).
+RRF_K      = 60
+AST_DEPTH  = 500   # độ dài danh sách BM25, embedding và danh sách AST sau khi gộp
+
+# ── History (mục 6, 6b pipeline_design.md) ───────────────────────────────────
+HIST_YEARS     = 5     # commit nhánh chính trong HIST_YEARS năm trước HEAD
+HIST_MAX_TOUCH = 50    # commit sửa quá nhiều hàm/lớp bị bỏ khỏi bằng chứng HIST (ROSE bỏ transaction > 30 thực thể)
+LOCUS_LAMBDA   = 5     # Locus: α = min(1, λ·#tên code / #token của query)
+LOCUS_BETA1    = 0.1   # Locus: trọng số của thành phần Fix
+# Danh sách HIST trộn với AST ở phần Code: "locus" (đã đo ở v4-L8) hoặc "hist_msg"
+# (thiết kế judge v5, chưa chạy trên Kaggle). Bằng chứng HIST luôn là commit của hist_msg.
+HIST_RANK_SOURCE = "locus"
+EVID_POOL_N    = 10    # số phần tử của pool mỗi loại bằng chứng (V4_EVID_N)
+
+# ── ISSUE (mục 7 pipeline_design.md) ─────────────────────────────────────────
+# Issue và PR đã đóng tải từ GitHub REST API. Có token: 5.000 lượt gọi mỗi giờ.
+# Không có token: 60 lượt mỗi giờ; hết lượt thì dừng, lần build sau tải tiếp.
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+
+# ── K(p): phần Thực thể được nhắc, caller/callee ─────────────────────────────
+ENTITY_LIMIT   = 30   # số node trùng tên/đường dẫn trong prompt được giữ (như LIMIT của _find_seeds)
+NEIGHBOR_LIMIT = 10   # số caller và số callee một bước kèm mỗi item Code
+
+# ── K(p) đưa cho LLM ─────────────────────────────────────────────────────────
+# Hạn ngạch cố định (mốc fixed-k của verify-v4, V4_EV_QUOTA) cho tới khi chọn được ngưỡng.
+# Pool của mỗi loại vẫn giữ EVID_POOL_N phần tử trong bản ghi lần chạy.
+CODE_N          = 10  # hàm/lớp đầu của danh sách trộn
+FILE_N          = 5
+ENTITY_SOURCE_N = 5   # thực thể (Function/Class) chưa có ở phần Code được kèm source
+DOC_QUOTA       = 5
+HIST_QUOTA      = 10
+ISSUE_QUOTA     = 5
+
+# ── Sinh câu trả lời ─────────────────────────────────────────────────────────
+RUNS_DIRNAME = "runs"   # bản ghi lần chạy: {INDEX_ROOT}/{repo}/runs/
+
 # ── BM25 fulltext search ──────────────────────────────────────────────────────
 # Neo4j fulltext index (Lucene + BM25) dùng để tìm seed nodes từ issue text.
 # Bao gồm label của cả hai schema (simple + detailed) — label không tồn tại
