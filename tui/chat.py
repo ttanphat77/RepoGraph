@@ -1,48 +1,39 @@
 # tui/chat.py — RepoGraph chatbot, full-screen terminal app (Textual + rich + Gemini)
 #
-# Conversational with memory. The google.genai chat session keeps the full history.
-# The model calls the search_repo tool only when a question needs code from the
-# Knowledge Graph. Not every message triggers retrieval.
+# Hai chế độ (/mode):
+#   prompt (mặc định)  Mỗi tin nhắn là một lần prompting riêng (giai đoạn 1 của app): truy hồi
+#                      K(p) đa nguồn, gọi Gemini một lần, ghi bản ghi lần chạy. Không có
+#                      history hội thoại, không có tool.
+#   chat               Hội thoại có memory (chat session của google.genai giữ history). Model
+#                      gọi tool search_repo khi cần, tool trả K(p) của query do model viết.
+#                      Giữ làm nền cho agent ở giai đoạn 2; chưa được đo.
 #
 # Full-screen (alternate screen) so rendering does not depend on the console
 # scrolling its viewport. Layout, top to bottom:
-#   header   model, schema, graph status and size, instance, repo, tool
-#   chat     scrollable log: "You" bubble → Retrieval panel (if the tool ran) → "Bot" bubble
+#   header   model, mode, repo and index, graph status
+#   chat     scrollable log: "You" bubble → K(p) panel → "Bot" bubble
 #   input    message box. Type 'exit' to quit, or press ctrl+q.
 #   footer   key bindings
 #
 # Slash commands (type /help):
-#   /model [name]   show or switch the Gemini model, conversation history is kept
-#   /schema         active schema and the node labels present in the graph
-#   /depth [1-3]    show or set BFS depth for search_repo
-#   /bm25 [n]       show or set the BM25 seed limit for search_repo
-#   /clear          clear the log and start a new conversation
-#   /reload         re-read the instance file and re-check Neo4j
-#   /exit           quit
+#   /mode [prompt|chat]  show or switch the mode
+#   /model [name]        show or switch the Gemini model, conversation history is kept
+#   /schema              active schema and the node labels present in the graph
+#   /clear               clear the log and start a new conversation
+#   /reload              re-read the index state and re-check Neo4j
+#   /exit                quit
 #
-# The Retrieval panel shows the 5 stages of pipeline/retriever.py:
-#   ① Pre-retrieve  identifiers extracted from the query (regex)
-#   ② Seed lookup   table of matched nodes, split by source regex / BM25
-#   ③ BFS           subgraph size, edge type breakdown
-#   ④ Ranking       table of ranked files, Mix column draws ● seed and ○ other nodes
-#   ⑤ Context       table of code sections sent to the LLM, in SEED / CALLER / CALLEE order
-#
-# Colors carry meaning. Standard color names are used so they fit any terminal theme:
-#   green   user, exact match (regex, SEED)
-#   cyan    bot
-#   yellow  fuzzy match (BM25), CALLER
-#   blue    Function, CALLEE
-#   magenta Class
-#   dim     Module, secondary numbers, trace panel border
+# The K(p) panel shows one table per section of the retrieved context: [E] entities named in
+# the prompt, [C] code, [D] documentation, [H] past commits, [I] past bug reports. In prompt
+# mode it also marks the cited items (✓) and ends with the metrics line and the record path.
 #
 # Run from the repo root:  .venv\Scripts\python.exe -m tui.chat
 
 import json
 import os
-import re
 import sys
 import time
-from collections import Counter
+from pathlib import Path
 
 # The repo root must be on sys.path because the pipeline does `import config`.
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -72,158 +63,39 @@ from textual.containers import VerticalScroll
 from textual.widgets import Footer, Input, Static
 
 import config
-from pipeline.evaluator import run_retrieval_only
-
-# Max rows per table in the trace, so the trace stays short.
-_MAX_ROWS = 10
-
-# Each code section header in the context looks like:  [SEED] `name` — file:1-20
-_RE_CTX_HEADER = re.compile(r"^\[([A-Za-z_]+)\] `([^`]+)` — (.+)$")
-
-# Colors by node label and by context tag.
-_LABEL_STYLE = {
-    "Function": "blue", "FUNCTION": "blue", "METHOD": "blue",
-    "Class": "magenta", "CLASS": "magenta",
-    "Module": "dim", "MODULE": "dim",
-}
-_TAG_STYLE = {"SEED": "bold green", "CALLER": "yellow", "CALLEE": "blue"}
-
-# Written by scripts/build_graph.py after each build.
-_INSTANCE_PATH = os.path.join(_REPO_ROOT, "cache", "current_instance.json")
+from pipeline.context import format_sections, retrieve_kp
+from pipeline.evaluator import get_engine, run_prompt
+from pipeline.generator import count_section_tokens, stream_answer
+from pipeline.run_record import latest_index_dir, retrieval_block
+from tui.kp_render import kp_tables, metrics_line
 
 _SYSTEM = """\
 You are an assistant for this code repository. The repository is indexed in a \
-Knowledge Graph of modules, classes and functions.
+multi-source graph of code, documentation, past commits and past bug reports.
 
 Call the `search_repo` tool when the user asks about the code: files, functions, \
-classes, how something works, where something is defined, or how to fix an issue. \
+classes, how something works, where something is defined, why something changed, \
+or how to fix an issue. Write the query as a self-contained English sentence. \
 Do not call it for greetings, thanks, or general conversation that does not need \
 the code.
 
-When you cite code, use the form `symbol` in `path/to/file:line`. \
+The tool returns context items with ids such as [C2] or [D1]. Cite code as \
+`symbol` in `path/to/file:line` and cite items by their id. \
 Answer in the same language the user writes in.\
 """
 
 
-# ── Trace building blocks ────────────────────────────────────────────────────
-def _stage(num: str, title: str, summary: str) -> Text:
-    """Stage header line: circled number, bold title, dim summary."""
-    t = Text()
-    t.append(f"{num} ", style="bold cyan")
-    t.append(f"{title:<13}", style="bold")
-    t.append(summary, style="dim")
-    return t
-
-
-def _table(*columns: str) -> Table:
-    """Compact borderless table, indented under the stage header."""
-    tb = Table(box=None, show_header=True, header_style="dim", pad_edge=False,
-               padding=(0, 1), collapse_padding=True)
-    tb.add_column(" ", width=2)  # indent column
-    for c in columns:
-        tb.add_column(c)
-    return tb
-
-
-def _more(n: int) -> list:
-    """Dim '… +N' line when a table is truncated."""
-    return [Text(f"   … +{n - _MAX_ROWS}", style="dim")] if n > _MAX_ROWS else []
-
-
-def _retrieval_panel(query: str, r: dict, elapsed: float, depth: int) -> Panel:
-    """Build the 5-stage retrieval panel from the dict returned by run_retrieval_only."""
-    candidates = r.get("candidates") or []
-    seeds = r.get("seed_nodes") or []
-    sub = r.get("subgraph") or {"nodes": [], "edges": []}
-    files = r.get("candidate_files") or []
-    context = r.get("context") or ""
-    seed_ids = {n["neo_id"] for n in seeds}
-
+# ── K(p) panel ───────────────────────────────────────────────────────────────
+def _kp_panel(title: str, retrieval: dict, footer: str = "", warnings: list[str] | None = None) -> Panel:
+    """Bảng của từng phần K(p), cảnh báo, và dòng số liệu."""
     parts: list = []
-
-    # ① Pre-retrieve
-    parts.append(_stage("①", "Pre-retrieve", f"{len(candidates)} identifiers"))
-    if candidates:
-        idents = Text("   ")
-        for i, c in enumerate(candidates[:_MAX_ROWS]):
-            if i:
-                idents.append(" · ", style="dim")
-            idents.append(c, style="green")
-        if len(candidates) > _MAX_ROWS:
-            idents.append(f" … +{len(candidates) - _MAX_ROWS}", style="dim")
-        parts.append(idents)
-
-    # ② Seed lookup. BM25 nodes carry a `score` key, regex nodes do not.
-    n_bm25 = sum(1 for n in seeds if "score" in n)
-    n_regex = len(seeds) - n_bm25
-    parts.append(_stage("②", "Seed lookup",
-                        f"{len(seeds)} seeds · regex {n_regex} · bm25 {n_bm25}"))
-    if seeds:
-        tb = _table("Label", "Name", "Location", "Match")
-        for n in seeds[:_MAX_ROWS]:
-            label = str(n.get("label") or "")
-            loc = f"{n.get('file') or ''}:{n.get('start_line') or ''}"
-            if "score" in n:
-                match = Text(f"bm25 {n['score']:.2f}", style="yellow")
-            else:
-                match = Text("exact", style="green")
-            tb.add_row("", Text(label, style=_LABEL_STYLE.get(label, "")),
-                       Text(str(n.get("name") or ""), style="bold"),
-                       Text(loc, style="dim"), match)
-        parts.append(tb)
-        parts += _more(len(seeds))
-
-    # ③ BFS
-    rel = Counter(e["rel_type"] for e in sub["edges"])
-    parts.append(_stage("③", f"BFS depth {depth}",
-                        f"{len(sub['nodes'])} nodes · {len(sub['edges'])} edges"))
-    if rel:
-        edges = Text("   ")
-        for i, (t, c) in enumerate(rel.most_common()):
-            if i:
-                edges.append(" · ", style="dim")
-            edges.append(t, style="cyan")
-            edges.append(f" {c}", style="dim")
-        parts.append(edges)
-
-    # ④ Ranking. Count seed and other nodes per file to explain the order.
-    per_file: dict[str, list[int]] = {}
-    for n in sub["nodes"]:
-        f = n.get("file")
-        if not f:
-            continue
-        d = per_file.setdefault(f, [0, 0])
-        d[0 if n["neo_id"] in seed_ids else 1] += 1
-    parts.append(_stage("④", "Ranking", f"{len(files)} files"))
-    if files:
-        tb = _table("#", "File", "Seed", "Other", "Mix")
-        for i, f in enumerate(files[:_MAX_ROWS], 1):
-            s, o = per_file.get(f, (0, 0))
-            mix = Text()
-            mix.append("●" * min(s, 8), style="green")
-            mix.append("○" * min(o, 8), style="dim")
-            tb.add_row("", Text(str(i), style="dim"), Text(f, style="bold"),
-                       Text(str(s), style="green"), Text(str(o), style="dim"), mix)
-        parts.append(tb)
-        parts += _more(len(files))
-
-    # ⑤ Context. Read each section header to show the exact order the LLM receives.
-    headers = [m for m in (_RE_CTX_HEADER.match(ln) for ln in context.splitlines()) if m]
-    parts.append(_stage("⑤", "Context", f"{len(headers)} sections · {len(context)} chars"))
-    if headers:
-        tb = _table("Tag", "Name", "Location")
-        for m in headers[:_MAX_ROWS]:
-            tag, name, loc = m.groups()
-            tb.add_row("", Text(tag, style=_TAG_STYLE.get(tag, "dim")),
-                       Text(name, style="bold"), Text(loc, style="dim"))
-        parts.append(tb)
-        parts += _more(len(headers))
-
-    title = Text()
-    title.append("🔍 Retrieval ", style="bold yellow")
-    title.append(f"“{query}”", style="dim")
-    title.append(f" · {elapsed:.2f}s", style="dim")
-    return Panel(Group(*parts), title=title, title_align="left",
+    for t in kp_tables(retrieval):
+        parts += [t, Text("")]
+    for w in warnings or []:
+        parts.append(Text(f"warning: {w}", style="yellow"))
+    if footer:
+        parts.append(Text(footer, style="dim"))
+    return Panel(Group(*parts), title=Text(title, style="bold yellow"), title_align="left",
                  border_style="dim", box=box.ROUNDED)
 
 
@@ -271,16 +143,15 @@ def _label_counts() -> dict | None:
         return None
 
 
-def _instance() -> dict:
-    """Current instance state from cache/current_instance.json. Empty if missing."""
+def _index_state(index_dir: Path | None) -> dict:
+    """index_state.json of the index the app answers from. Empty if missing."""
     try:
-        with open(_INSTANCE_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
+        return json.loads((index_dir / "index_state.json").read_text(encoding="utf-8"))
     except Exception:
         return {}
 
 
-def _header_panel(stats: dict | None, inst: dict, model: str, depth: int,
+def _header_panel(stats: dict | None, state: dict, index_dir: Path | None, model: str, mode: str,
                   checking: bool = False) -> Panel:
     """Key/value header. checking=True shows the graph status as pending."""
     graph = Text(config.NEO4J_URI)
@@ -294,24 +165,28 @@ def _header_panel(stats: dict | None, inst: dict, model: str, depth: int,
         graph.append(" ● down", style="red")
         size = Text("—", style="dim")
 
-    instance = Text(str(inst.get("instance_id") or "—"))
-    gt = inst.get("gt_files") or []
-    if gt:
-        instance.append(f" · {len(gt)} GT files", style="dim")
-    repo, commit = inst.get("repo"), inst.get("base_commit")
-    repo_s = f"{repo}@{commit[:7]}" if repo and commit else (repo or "—")
+    head = state.get("head_sha") or ""
+    repo = Text(f"{state.get('remote') or state.get('repo_path') or '—'}" + (f"@{head[:8]}" if head else ""))
+    n = state.get("nodes") or {}
+    index = Text(str(index_dir) if index_dir else "— (run scripts/build_graph.py first)")
+    if n:
+        index.append(f" · code {n.get('Function', 0) + n.get('Class', 0):,} · doc chunks {n.get('DocChunk', 0):,}"
+                     f" · commits {n.get('Commit', 0):,} · issues {n.get('Issue', 0):,}", style="dim")
+
+    mode_t = Text(mode, style="bold")
+    mode_t.append("  one prompt = one retrieval + one LLM call" if mode == "prompt"
+                  else "  conversation with memory, model calls search_repo", style="dim")
 
     # Single key/value column. A 2x2 grid fights for width and wraps on narrow terminals.
     g = Table.grid(padding=(0, 2))
     g.add_column(style="dim")
     g.add_column()
     g.add_row("Model", model)
-    g.add_row("Schema", config.ACTIVE_SCHEMA)
+    g.add_row("Mode", mode_t)
+    g.add_row("Repo", repo)
+    g.add_row("Index", index)
     g.add_row("Graph", graph)
     g.add_row("Size", size)
-    g.add_row("Instance", instance)
-    g.add_row("Repo", repo_s)
-    g.add_row("Tool", f"search_repo · BFS depth {depth} · BM25 top {config.BM25_SEED_LIMIT}")
     return Panel(g, title="[bold cyan]RepoGraph Chat[/]", title_align="left",
                  subtitle="/help for commands", subtitle_align="right",
                  border_style="cyan", box=box.ROUNDED)
@@ -332,12 +207,11 @@ def _system_bubble(body) -> Panel:
 # (name, usage, description). Used by /help and by the command list that pops
 # up above the input while the text starts with "/".
 _COMMANDS = (
+    ("/mode", "/mode [name]", "show or switch the mode: prompt (one-shot, default) or chat"),
     ("/model", "/model [name]", "show or switch the Gemini model, conversation history is kept"),
     ("/schema", "/schema", "active schema and the node labels present in the graph"),
-    ("/depth", "/depth [1-3]", "show or set BFS depth for search_repo"),
-    ("/bm25", "/bm25 [n]", "show or set the BM25 seed limit for search_repo"),
     ("/clear", "/clear", "clear the log and start a new conversation"),
-    ("/reload", "/reload", "re-read the instance file and re-check Neo4j"),
+    ("/reload", "/reload", "re-read the index state and re-check Neo4j"),
     ("/exit", "/exit", "quit (also: exit, ctrl+q)"),
 )
 
@@ -373,20 +247,21 @@ class _CommandInput(Input):
 class _BotView:
     """State of the Bot bubble for one turn. panel() is rebuilt on a timer
     while streaming, so the spinner animates and the elapsed time ticks.
-    search_repo updates `status` to signal the tool call."""
+    The retrieval step and search_repo update `status`."""
 
-    def __init__(self) -> None:
+    def __init__(self, status: str = "thinking") -> None:
         self.t0 = time.perf_counter()
         self.answer = ""
-        self.status = "thinking"
+        self.status = status
         self.final = False
         self.total = 0.0
+        self.footer = ""
         self._spinner = Spinner("dots", style="cyan")
 
     def panel(self) -> Panel:
         if self.final:
             body = Markdown(self.answer) if self.answer else Text("(no content)", style="dim")
-            subtitle = f"{self.total:.1f}s"
+            subtitle = self.footer or f"{self.total:.1f}s"
         else:
             elapsed = time.perf_counter() - self.t0
             subtitle = f"{elapsed:.1f}s" + (f" · {self.status}" if self.status else "")
@@ -413,7 +288,9 @@ class RepoGraphChat(App):
         super().__init__()
         self.client = genai.Client(api_key=config.GEMINI_API_KEY)
         self.model = config.GEMINI_MODEL
-        self.depth = 2                         # BFS depth, same as the Issue Query tab default
+        self.mode = "prompt"
+        self.index_dir = latest_index_dir()
+        self.state = _index_state(self.index_dir)
         self.stats: dict | None = None         # last Neo4j check, for header re-renders
         self.chat = self._new_chat()
         self.turn: _BotView | None = None      # bot view of the turn in progress
@@ -433,7 +310,7 @@ class RepoGraphChat(App):
         )
 
     def compose(self) -> ComposeResult:
-        yield Static(_header_panel(None, _instance(), self.model, self.depth, checking=True),
+        yield Static(_header_panel(None, self.state, self.index_dir, self.model, self.mode, checking=True),
                      id="header")
         yield VerticalScroll(id="chat")
         yield Static(id="cmds")  # command list, shown while the input starts with "/"
@@ -497,7 +374,7 @@ class RepoGraphChat(App):
 
     def _refresh_header(self) -> None:
         self.query_one("#header", Static).update(
-            _header_panel(self.stats, _instance(), self.model, self.depth))
+            _header_panel(self.stats, self.state, self.index_dir, self.model, self.mode))
 
     @work(thread=True)
     def load_header(self) -> None:
@@ -517,6 +394,15 @@ class RepoGraphChat(App):
 
         if cmd == "/help":
             self._system(_HELP)
+        elif cmd == "/mode":
+            if arg in ("prompt", "chat"):
+                self.mode = arg
+                self._refresh_header()
+                self._system(f"Mode set to {arg}.")
+            elif arg:
+                self._system("Usage: /mode prompt|chat")
+            else:
+                self._system(f"Mode: {self.mode}")
         elif cmd == "/model":
             if arg:
                 self.model = arg
@@ -528,31 +414,15 @@ class RepoGraphChat(App):
                 self._system(f"Model: {self.model}")
         elif cmd == "/schema":
             self.show_schema()
-        elif cmd == "/depth":
-            if arg in ("1", "2", "3"):
-                self.depth = int(arg)
-                self._refresh_header()
-                self._system(f"BFS depth set to {self.depth}.")
-            elif arg:
-                self._system("Usage: /depth 1|2|3")
-            else:
-                self._system(f"BFS depth: {self.depth}")
-        elif cmd == "/bm25":
-            if arg.isdigit() and int(arg) > 0:
-                config.BM25_SEED_LIMIT = int(arg)  # read by the retriever on each call
-                self._refresh_header()
-                self._system(f"BM25 seed limit set to {arg}.")
-            elif arg:
-                self._system("Usage: /bm25 <positive integer>")
-            else:
-                self._system(f"BM25 seed limit: {config.BM25_SEED_LIMIT}")
         elif cmd == "/clear":
             self.query_one("#chat", VerticalScroll).remove_children()
             self.chat = self._new_chat()
             self._system("Log cleared. New conversation started.")
         elif cmd == "/reload":
+            self.index_dir = latest_index_dir()
+            self.state = _index_state(self.index_dir)
             self.load_header()
-            self._system("Reloading instance file and re-checking Neo4j.")
+            self._system("Reloading the index state and re-checking Neo4j.")
         elif cmd in ("/exit", "/quit"):
             self.exit()
         else:
@@ -565,8 +435,7 @@ class RepoGraphChat(App):
         body = Text()
         body.append("Active schema: ", style="dim")
         body.append(config.ACTIVE_SCHEMA + "\n")
-        body.append("Set in config.py. Applies when build_graph.py ingests; "
-                    "the retriever matches both label sets.\n", style="dim")
+        body.append("Set in config.py. Applies when build_graph.py ingests.\n", style="dim")
         if counts is None:
             body.append("Graph unreachable, no label counts.", style="red")
         elif not counts:
@@ -587,17 +456,23 @@ class RepoGraphChat(App):
         if msg.startswith("/"):
             self._command(msg)
             return
+        if self.mode == "prompt" and self.index_dir is None:
+            self._system("No built index. Run scripts/build_graph.py first, then /reload.")
+            return
 
         log = self.query_one("#chat", VerticalScroll)
         log.mount(Static(_user_bubble(msg)))
-        self.turn = _BotView()
+        self.turn = _BotView("retrieving context" if self.mode == "prompt" else "thinking")
         self.bot_widget = Static(self.turn.panel())
         log.mount(self.bot_widget)
 
-        # One send at a time on the shared chat session.
+        # One send at a time.
         event.input.disabled = True
         self._tick = self.set_interval(1 / 15, self._refresh_bot)
-        self.stream(msg)
+        if self.mode == "prompt":
+            self.ask(msg)
+        else:
+            self.stream(msg)
 
     def _refresh_bot(self) -> None:
         if self.turn and self.bot_widget:
@@ -605,7 +480,40 @@ class RepoGraphChat(App):
             self.query_one("#chat", VerticalScroll).scroll_end(animate=False)
 
     @work(thread=True)
+    def ask(self, msg: str) -> None:
+        """Prompt mode: one run_prompt call. K(p) panel and metrics appear when the run ends."""
+        turn = self.turn
+
+        def _on_text(s: str) -> None:
+            turn.status = ""
+            turn.answer += s
+
+        model = self.model
+        try:
+            rec, run_dir = run_prompt(
+                msg, index_dir=self.index_dir, on_text=_on_text,
+                llm=lambda system, user, cb: stream_answer(system, user, cb, model=model),
+                counter=lambda parts: count_section_tokens(parts, model=model))
+            if not turn.answer:
+                turn.answer = (run_dir / "answer.md").read_text(encoding="utf-8")
+            if rec.get("retrieval"):
+                self.call_from_thread(self.add_before_bot, _kp_panel(
+                    f"K(p) · {(rec['timing'].get('total_ms') or 0) / 1000:.1f}s", rec["retrieval"],
+                    metrics_line(rec, run_dir), rec["warnings"]))
+            elif rec["warnings"]:
+                turn.answer += "\n\n" + "\n".join(f"**Warning:** {w}" for w in rec["warnings"])
+            llm = rec.get("llm") or {}
+            turn.footer = (f"{(rec['timing'].get('total_ms') or 0) / 1000:.1f}s · in "
+                           f"{llm.get('prompt_token_count') or 0:,} · out {llm.get('candidates_token_count') or 0:,}")
+        except Exception as e:
+            turn.answer += f"\n\n**Error:** {e}"
+        turn.final = True
+        turn.total = time.perf_counter() - turn.t0
+        self.call_from_thread(self._finish)
+
+    @work(thread=True)
     def stream(self, msg: str) -> None:
+        """Chat mode: the chat session streams, the model may call search_repo."""
         turn = self.turn
         try:
             for chunk in self.chat.send_message_stream(msg):
@@ -643,29 +551,32 @@ class RepoGraphChat(App):
 
 
 # The running app. search_repo is called by the SDK from the stream worker
-# thread and needs it to post the retrieval panel into the chat log.
+# thread and needs it to post the K(p) panel into the chat log.
 _app: RepoGraphChat | None = None
 
 
-# ── Tool exposed to the model ────────────────────────────────────────────────
+# ── Tool exposed to the model (chat mode) ────────────────────────────────────
 def search_repo(query: str) -> str:
-    """Search the repository Knowledge Graph for code related to the query.
+    """Search the repository for code, documentation, past commits and past bug reports related to the query.
 
     Args:
-        query: A function name, class name, keyword, or a description of the problem.
+        query: A self-contained description of what to look for: a function or class name, a behavior, or a problem.
     """
     app = _app
-    depth = app.depth if app else 2
-    if app and app.turn:
+    if app is None or app.index_dir is None:
+        return "No built index is available."
+    if app.turn:
         app.turn.status = f"calling search_repo · {query}"
     t0 = time.perf_counter()
-    result = run_retrieval_only(query, depth=depth)
-    panel = _retrieval_panel(query, result, time.perf_counter() - t0, depth)
-    if app:
-        app.call_from_thread(app.add_before_bot, panel)
-        if app.turn:
-            app.turn.status = "generating"
-    return result.get("context", "") or ""
+    kp = retrieve_kp(get_engine(app.index_dir), query, time.time(), {})
+    sections = format_sections(kp)
+    panel = _kp_panel(f"search_repo “{query}” · {time.perf_counter() - t0:.2f}s", retrieval_block(kp, set()))
+    app.call_from_thread(app.add_before_bot, panel)
+    if app.turn:
+        app.turn.status = "generating"
+    titles = {"entities": "Entities named in the query [E]", "code": "Code [C]", "files": "Files",
+              "doc": "Documentation passages [D]", "hist": "Past commits [H]", "issue": "Past bug reports [I]"}
+    return "\n\n".join(f"### {titles[k]}\n\n{v}" for k, v in sections.items())
 
 
 def main() -> None:

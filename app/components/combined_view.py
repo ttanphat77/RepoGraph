@@ -1,19 +1,19 @@
 # =============================================================================
 # app/components/combined_view.py — Graph + Query gộp chung một màn hình
 #
-# Layout: cột trái (query controls + results) | cột phải (NeoVis graph)
+# Layout: graph NeoVis (trên) | query (dưới)
 #
-# Cột trái là Streamlit-native (text_area, button, metrics, markdown).
-# Cột phải là iframe NeoVis — render với highlight IDs từ session_state.
-# Sau mỗi lần Retrieve, Streamlit rerender toàn bộ trang → NeoVis tự
-# cập nhật highlight mà không cần round-trip thêm.
+# Query là một lần prompting trên K(p) (pipeline.evaluator.run_prompt): truy hồi
+# đa nguồn (code, doc, commit, báo cáo cũ), gọi LLM một lần, ghi bản ghi lần chạy.
+# Node của K(p) được tô trên graph qua session_state (query_seed_ids = phần Code và
+# thực thể; query_subgraph_ids = thêm caller/callee, chunk doc, commit, issue).
 # =============================================================================
 
 from __future__ import annotations
 
-import json
 import os
 import sys
+from pathlib import Path
 
 import streamlit as st
 
@@ -25,16 +25,17 @@ from app.components.query_view import (
     _load_current_instance,
     _file_status_icon,
 )
-from pipeline.retriever import GraphRetriever
-from pipeline.generator import generate_stream, extract_files_from_answer
+from pipeline.context import qualified
+from pipeline.evaluator import run_prompt
+from pipeline.generator import extract_files_from_answer
 
 
 def render_combined_view() -> None:
     """
     Render màn hình gộp Graph + Query.
 
-    Cột trái (~38%): issue input, nút Retrieve, kết quả.
-    Cột phải (~62%): NeoVis graph với highlight từ kết quả query.
+    Trên: NeoVis graph với highlight từ K(p) của lần hỏi gần nhất.
+    Dưới: ô nhập prompt, nút chạy, câu trả lời, bảng K(p) và số liệu.
     """
     modules = client.get_modules()
     if not modules:
@@ -63,131 +64,127 @@ def render_combined_view() -> None:
     st.divider()
 
     # ── Query UI (bên dưới graph) ─────────────────────────────────────────────
-    st.subheader("Issue Query")
+    st.subheader("Prompt")
 
     col_input, col_controls = st.columns([3, 1], gap="medium")
     with col_input:
         issue_text = st.text_area(
-            "Issue / Problem Statement",
+            "Issue / question",
             value=problem,
             height=120,
-            placeholder="Dán nội dung issue vào đây...",
+            placeholder="Dán issue hoặc câu hỏi về repo vào đây...",
             label_visibility="collapsed",
         )
     with col_controls:
-        depth   = st.selectbox("Depth BFS", [1, 2, 3], index=1)
-        run_llm = st.checkbox("Gọi LLM", value=True)
-        do_query = st.button("🔍  Retrieve", use_container_width=True)
+        st.caption("Một lần truy hồi K(p) + một lần gọi LLM")
+        do_query = st.button("🔍  Retrieve + Generate", use_container_width=True)
 
-    _render_query_results(
-        do_query=do_query,
-        issue_text=issue_text,
-        depth=depth,
-        run_llm=run_llm,
-        gt_files=gt_files,
-    )
+    _render_query_results(do_query=do_query, issue_text=issue_text, gt_files=gt_files)
 
 
-# ── Query logic (tách để col_query gọn) ──────────────────────────────────────
+# ── Query logic ──────────────────────────────────────────────────────────────
 
-def _render_query_results(
-    do_query: bool,
-    issue_text: str,
-    depth: int,
-    run_llm: bool,
-    gt_files: list[str],
-) -> None:
-    """Thực hiện retrieval + generation và render kết quả vào cột trái."""
-
+def _render_query_results(do_query: bool, issue_text: str, gt_files: list[str]) -> None:
+    """Chạy run_prompt và render kết quả. Không bấm nút → hiện lại kết quả gần nhất."""
     if not do_query:
-        if not st.session_state.get("query_seed_ids"):
-            st.info("Nhấn **Retrieve + Generate** để bắt đầu.")
+        if st.session_state.get("kp_result"):
+            _render_result(st.session_state["kp_result"], gt_files)
         else:
-            # Đã có kết quả từ lần query trước — hiện lại từ session_state
-            _render_cached_results(gt_files)
+            st.info("Nhấn **Retrieve + Generate** để bắt đầu.")
         return
 
     if not issue_text.strip():
-        st.warning("Vui lòng nhập issue text.")
+        st.warning("Vui lòng nhập prompt.")
         return
 
-    with st.spinner("Đang truy xuất Knowledge Graph..."):
-        retriever = GraphRetriever()
-        result    = retriever.retrieve(issue_text, depth=depth)
-        retriever.close()
+    with st.spinner("Đang truy hồi K(p) và gọi LLM..."):
+        rec, run_dir = run_prompt(issue_text)
+    answer = (run_dir / "answer.md").read_text(encoding="utf-8")
 
-    candidates      = result["candidates"]
-    seed_nodes      = result["seed_nodes"]
-    subgraph        = result["subgraph"]
-    context         = result["context"]
-    candidate_files = result["candidate_files"]
+    r = rec.get("retrieval") or {}
+    code = r.get("code", [])
+    seed = [c["id"] for c in code] + [e["id"] for e in r.get("entities", {}).get("items", [])]
+    sub = (seed + [x["id"] for c in code for x in c["callers"] + c["callees"]]
+           + [d["id"] for d in (r.get("doc") or {}).get("items", []) if d["in_context"]]
+           + [f"commit:{h['h']}" for h in r.get("hist", []) if h["in_context"]]
+           + [f"issue:{i['n']}" for i in r.get("issue", []) if i["in_context"]])
+    st.session_state["query_seed_ids"]     = list(dict.fromkeys(seed))
+    st.session_state["query_subgraph_ids"] = list(dict.fromkeys(sub))
 
-    # Dùng custom string ID (n.identity) thay vì Neo4j internal integer (neo_id)
-    # để tránh type mismatch giữa Python int và vis-network node ID
-    st.session_state["query_seed_ids"]     = [n["identity"] for n in seed_nodes if n.get("identity")]
-    st.session_state["query_subgraph_ids"] = [n["identity"] for n in subgraph["nodes"] if n.get("identity")]
+    result = {"rec": rec, "run_dir": str(run_dir), "answer": answer}
+    st.session_state["kp_result"] = result
+    _render_result(result, gt_files)
 
-    # ── Retrieval summary ─────────────────────────────────────────────────────
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Identifiers", len(candidates))
-    m2.metric("Seed nodes",  len(seed_nodes))
-    m3.metric("Subgraph",    len(subgraph["nodes"]))
 
-    # Seed nodes + candidate files từ GraphRAG retriever
-    with st.expander(f"GraphRAG Results — {len(seed_nodes)} seed nodes, {len(candidate_files)} candidate files"):
-        if seed_nodes:
-            st.markdown("**Seed Nodes**")
-            for n in seed_nodes:
-                st.caption(f"`[{n['label']}]` **{n['name']}** — `{n['file']}:{n['start_line']}`")
-        if candidate_files:
-            st.markdown("**Candidate Files**")
-            for f in candidate_files:
-                icon = "🎯" if f in gt_files else "📄"
-                st.caption(f"{icon} `{f}`")
+def _rows(items: list[dict], cols: dict) -> list[dict]:
+    """Bảng của một phần K(p): chỉ phần tử đã gửi cho LLM; cols = {tên cột: hàm lấy giá trị}."""
+    return [{name: fn(it) for name, fn in cols.items()} for it in items if it.get("in_context", True)]
 
-    st.divider()
 
-    # ── LLM Answer (stream trực tiếp) ─────────────────────────────────────────
+def _render_result(result: dict, gt_files: list[str]) -> None:
+    """Số liệu, câu trả lời, cảnh báo, bảng K(p), file dự đoán (P/R/F1 khi có GT) và bản ghi."""
+    rec, answer = result["rec"], result["answer"]
+    r, llm = rec.get("retrieval") or {}, rec.get("llm") or {}
+    cit = rec.get("citations") or {}
+
+    m = st.columns(5)
+    m[0].metric("Tokens in", f"{llm.get('prompt_token_count') or 0:,}")
+    m[1].metric("Tokens out", f"{llm.get('candidates_token_count') or 0:,}")
+    m[2].metric("Thinking", f"{llm.get('thoughts_token_count') or 0:,}")
+    m[3].metric("Time", f"{(rec['timing'].get('total_ms') or 0) / 1000:.1f} s")
+    m[4].metric("Cited", f"{sum((cit.get('cited_per_section') or {}).values())}"
+                         f"/{sum((cit.get('cited_per_section') or {}).values()) + sum((cit.get('uncited_per_section') or {}).values())}")
+
     st.markdown("**LLM Answer**")
-    meta = {}
-    if run_llm and context:
-        full_answer = st.write_stream(
-            generate_stream(issue_text, context, meta)
-        )
-    else:
-        full_answer = ""
-        st.info("LLM bị tắt hoặc không có context để gửi.")
+    st.markdown(answer or "_(no answer)_")
+    for w in rec.get("warnings", []):
+        st.warning(w)
 
-    if meta:
-        t1, t2 = st.columns(2)
-        t1.metric("Input tokens",  meta.get("input_tokens", 0))
-        t2.metric("Output tokens", meta.get("output_tokens", 0))
-        reason = meta.get("finish_reason", "")
-        if reason and reason not in ("FinishReason.STOP", "STOP", "INTERRUPTED"):
-            st.warning(f"⚠️ finish_reason: `{reason}`")
+    yes = lambda it: "✓" if it.get("cited") else ""
+    sections = [
+        ("[E] Entities named in the prompt", r.get("entities", {}).get("items", []),
+         {"id": lambda e: e["tag"], "element": lambda e: qualified(e["id"]),
+          "location": lambda e: f"{e['file']}:{e.get('start_line') or ''}", "match": lambda e: e["matched"],
+          "cited": yes}),
+        ("[C] Code", r.get("code", []),
+         {"id": lambda c: c["tag"], "element": lambda c: qualified(c["id"]),
+          "location": lambda c: f"{c['file']}:{c['start_line']}", "fused": lambda c: round(c["fused_score"], 4),
+          "AST": lambda c: c["ast_rank"], "HIST": lambda c: c["hist_rank"],
+          "callers/callees": lambda c: f"{c['n_callers']}/{c['n_callees']}", "cited": yes}),
+        (f"[D] Documentation ({(r.get('doc') or {}).get('pool')})", (r.get("doc") or {}).get("items", []),
+         {"id": lambda d: d["tag"], "file": lambda d: d["file"], "section": lambda d: d["heading"],
+          "rrf": lambda d: round(d["score"], 4), "cos": lambda d: round(d["cos"], 3),
+          "links code": lambda d: ",".join(d["linked_code"]), "cited": yes}),
+        ("[H] Past commits", r.get("hist", []),
+         {"id": lambda h: h["tag"], "commit": lambda h: h["h"][:8], "s": lambda h: round(h["s"], 4),
+          "cos": lambda h: round(h["cos"], 3), "AST rank": lambda h: h["ast_r"],
+          "linked reports": lambda h: ",".join(f"#{n}" for n in h["links"]), "cited": yes}),
+        ("[I] Past bug reports", r.get("issue", []),
+         {"id": lambda i: i["tag"], "report": lambda i: f"#{i['n']}", "title": lambda i: i["title"],
+          "cos": lambda i: round(i["cos"], 3), "fixed elements": lambda i: len(i["fix"]), "cited": yes}),
+    ]
+    for title, items, cols in sections:
+        rows = _rows(items, cols)
+        with st.expander(f"{title} — {len(rows)} items", expanded=title.startswith("[C]")):
+            if rows:
+                st.dataframe(rows, use_container_width=True, hide_index=True)
+            else:
+                st.caption("(none)")
 
-    st.divider()
-
-    # ── Predicted Files (từ FILE: lines trong LLM answer) ────────────────────
+    # ── Predicted Files (từ FILE: lines trong câu trả lời) ───────────────────
     st.markdown("**Predicted Files**")
-    predicted_files = extract_files_from_answer(full_answer) if full_answer else candidate_files
-
+    predicted_files = extract_files_from_answer(answer) if answer else []
     if not predicted_files:
-        st.warning("Không tìm được file nào.")
+        st.caption("Câu trả lời không có dòng FILE:.")
     else:
-        lines = []
-        for f in predicted_files:
-            icon = _file_status_icon(f, gt_files, predicted_files)
-            lines.append(f"{icon}  `{f}`")
-        for f in gt_files:
-            if f not in predicted_files:
-                lines.append(f"🎯  `{f}` *(GT — missed)*")
+        lines = [f"{_file_status_icon(f, gt_files, predicted_files)}  `{f}`" for f in predicted_files]
+        lines += [f"🎯  `{f}` *(GT — missed)*" for f in gt_files if f not in predicted_files]
         st.markdown("\n\n".join(lines))
 
     if gt_files and predicted_files:
         tp        = len(set(predicted_files) & set(gt_files))
-        precision = tp / len(predicted_files) if predicted_files else 0
-        recall    = tp / len(gt_files) if gt_files else 0
+        precision = tp / len(predicted_files)
+        recall    = tp / len(gt_files)
         f1        = (2 * precision * recall / (precision + recall)
                      if (precision + recall) > 0 else 0)
         mc1, mc2, mc3 = st.columns(3)
@@ -195,115 +192,4 @@ def _render_query_results(
         mc2.metric("Recall",    f"{recall:.0%}")
         mc3.metric("F1",        f"{f1:.0%}")
 
-    llm_result = {
-        "answer":          full_answer,
-        "predicted_files": predicted_files,
-        "finish_reason":   meta.get("finish_reason", ""),
-        "input_tokens":    meta.get("input_tokens", 0),
-        "output_tokens":   meta.get("output_tokens", 0),
-    } if run_llm else None
-
-    # ── Cache for re-renders ───────────────────────────────────────────────────
-    st.session_state["last_result"] = {
-        "candidates":      candidates,
-        "seed_nodes":      seed_nodes,
-        "subgraph_size":   len(subgraph["nodes"]),
-        "candidate_files": candidate_files,
-        "predicted_files": predicted_files,
-        "llm_result":      llm_result,
-        "context":         context,
-    }
-
-
-def _render_cached_results(gt_files: list[str]) -> None:
-    """Render lại kết quả đã cache trong session_state (không re-query)."""
-    r = st.session_state.get("last_result")
-    if not r:
-        return
-    _render_result_body(
-        candidates      = r["candidates"],
-        seed_nodes      = r["seed_nodes"],
-        subgraph_size   = r["subgraph_size"],
-        predicted_files = r["predicted_files"],
-        candidate_files = r["candidate_files"],
-        gt_files        = gt_files,
-        llm_result      = r["llm_result"],
-        context         = r["context"],
-    )
-
-
-def _render_result_body(
-    candidates: list,
-    seed_nodes: list,
-    subgraph_size: int,
-    predicted_files: list[str],
-    candidate_files: list[str],
-    gt_files: list[str],
-    llm_result: dict | None,
-    context: str,
-) -> None:
-    """Render metrics, GraphRAG results, LLM answer, predicted files."""
-
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Identifiers", len(candidates))
-    m2.metric("Seed nodes",  len(seed_nodes))
-    m3.metric("Subgraph",    subgraph_size)
-
-    with st.expander(f"GraphRAG Results — {len(seed_nodes)} seed nodes, {len(candidate_files)} candidate files"):
-        if seed_nodes:
-            st.markdown("**Seed Nodes**")
-            for n in seed_nodes:
-                st.caption(f"`[{n['label']}]` **{n['name']}** — `{n['file']}:{n['start_line']}`")
-        if candidate_files:
-            st.markdown("**Candidate Files**")
-            for f in candidate_files:
-                icon = "🎯" if f in gt_files else "📄"
-                st.caption(f"{icon} `{f}`")
-
-    st.divider()
-
-    # LLM Answer
-    st.markdown("**LLM Answer**")
-    if llm_result:
-        st.markdown(llm_result["answer"])
-        t1, t2 = st.columns(2)
-        t1.metric("Input tokens",  llm_result["input_tokens"])
-        t2.metric("Output tokens", llm_result["output_tokens"])
-        reason = llm_result.get("finish_reason", "")
-        if reason and reason not in ("FinishReason.STOP", "STOP", "INTERRUPTED"):
-            st.warning(f"⚠️ finish_reason: `{reason}`")
-    else:
-        st.info("LLM bị tắt hoặc không có context để gửi.")
-
-    st.divider()
-
-    # Predicted Files
-    st.markdown("**Predicted Files**")
-    if not predicted_files:
-        st.warning("Không tìm được file nào.")
-    else:
-        lines = []
-        for f in predicted_files:
-            icon = _file_status_icon(f, gt_files, predicted_files)
-            lines.append(f"{icon}  `{f}`")
-        for f in gt_files:
-            if f not in predicted_files:
-                lines.append(f"🎯  `{f}` *(GT — missed)*")
-        st.markdown("\n\n".join(lines))
-
-    if gt_files and predicted_files:
-        tp        = len(set(predicted_files) & set(gt_files))
-        precision = tp / len(predicted_files) if predicted_files else 0
-        recall    = tp / len(gt_files) if gt_files else 0
-        f1        = (2 * precision * recall / (precision + recall)
-                     if (precision + recall) > 0 else 0)
-        mc1, mc2, mc3 = st.columns(3)
-        mc1.metric("Precision", f"{precision:.0%}")
-        mc2.metric("Recall",    f"{recall:.0%}")
-        mc3.metric("F1",        f"{f1:.0%}")
-
-    with st.expander(f"Context ({len(context)} chars)"):
-        st.code(
-            context[:6000] + ("..." if len(context) > 6000 else ""),
-            language="markdown",
-        )
+    st.caption(f"Record: `{Path(result['run_dir'])}`")
