@@ -1,14 +1,16 @@
 # Bối cảnh nghiên cứu RepoGraph
 
-File này được cập nhật ngày 2026-10-18. File tóm tắt toàn bộ trạng thái nghiên cứu hiện tại.
+File này được cập nhật ngày 2026-10-28. File tóm tắt toàn bộ trạng thái nghiên cứu hiện tại.
 Notebook chính là `colab/build_graph_flask_colab.ipynb`. Notebook được chạy trên Kaggle.
+Kết quả chi tiết của từng lượt chạy được ghi ở `experiment_log.md`, để so giữa các lượt.
 
 Có hai lượt thực nghiệm đã chạy xong và một lượt đang chạy:
 
 - **Lượt v2** chạy trên 12 repo của SWE-bench. Kết quả nằm trong `scale_rows_v2.jsonl` và thư mục `judge/`.
 - **Lượt v3** chạy trên django và sympy, có thêm lớp git history và judge mới. Lượt này **đã chạy xong trên Kaggle**. Kết quả nằm ở mục 7.9. Các vấn đề phát hiện sau lượt này nằm ở mục 7.10.
-- **Lượt v4** đang chạy. Lượt 1 trên Kaggle đã xong ngày 16/10/2026, và kết quả nằm ở mục 9.1. HIST theo Locus đã có danh sách xếp hạng, nhưng chưa được trộn với AST. ISSUE đã có dữ liệu cào (mục 9.2), nhưng chưa được cài đặt.
+- **Lượt v4** đang chạy. Lượt 1 trên Kaggle đã xong ngày 16/10/2026, và kết quả nằm ở mục 9.1. Lượt đầy đủ đầu tiên (v4-L4) xong ngày 22/10/2026, với đủ bốn nguồn, bước trộn và judge bằng chứng. Kết quả nằm ở mục 9.5.
 - **Định hướng đề tài** sau buổi thảo luận ngày 18/10/2026 nằm ở mục 12.
+- **Bộ độ đo và phương pháp đánh giá** (21/10/2026) nằm ở mục 13.
 
 ---
 
@@ -33,8 +35,8 @@ Có hai lượt thực nghiệm đã chạy xong và một lượt đang chạy:
 - Mục tiêu là tác động dương. Nếu chưa đạt, mục tiêu tối thiểu là không âm và có một phần dương.
 - "Tổng thể" nghĩa là không bắt buộc issue nào cũng có doc mô tả. Doc chỉ cần giúp khi xét chung trên toàn bộ issue.
 - Mọi loại doc đều được tính là doc, như specs, requirement hay user guide. Phân tích hiệu quả của từng loại doc sẽ làm sau.
-- Đây là phân tích dữ liệu, không phải xây benchmark. Vì vậy đề tài không chia dev và test, không dùng nhiều judge và không gán nhãn thủ công. Riêng kế hoạch phân tích và manifest của v4 được viết trước khi xem kết quả, để giai đoạn 3 chạy đúng luồng xử lý đã đóng băng (mục 6.9 của `planning.md`).
-- **Yêu cầu về judge.** Judge phải chấm **mọi node** của kết quả truy xuất, kể cả node document, và phải nhận nội dung đầy đủ. Lý do là chỉ chấm hàm và lớp thì không đánh giá được bản thân document.
+- Đây là phân tích dữ liệu, không phải xây benchmark. Vì vậy đề tài không chia dev và test, không dùng nhiều judge và không gán nhãn thủ công. Kế hoạch phân tích của v4 được viết trước khi xem kết quả, và phương pháp đã chốt không đổi chỉ vì kết quả xấu (mục 6.9 của `planning.md`). Đề tài cũng không chia dữ liệu thành tập dùng để chọn và tập dùng để xác nhận (quyết định 58).
+- **Yêu cầu về judge.** Judge phải chấm **mọi node** của kết quả truy xuất, kể cả node document, và phải nhận nội dung đầy đủ. Lý do là chỉ chấm hàm và lớp thì không đánh giá được bản thân document. Từ ngày 26/10/2026, yêu cầu này được thu hẹp: judge chỉ chấm bằng chứng, gồm chunk doc, hunk và báo cáo cũ. Node code được đánh giá bằng gold và độ đo theo cấu trúc (quyết định 52 và 53).
 - **LLM chỉ là judge.** Không nguồn nào dùng LLM để tạo xếp hạng. LLM chỉ chấm kết quả truy hồi.
 - **Commit phải được đọc cùng diff.** Chỉ đưa message mà không có diff thì không đánh giá được gì. Message có giá trị khi đi kèm diff.
 - **Phạm vi so sánh.** V4 so 8 hệ thống, gồm AST, +DOC, +HIST, +ISSUE, +ALL và ba hệ thống bỏ bớt một nguồn (mục 6.1 của `planning.md`). Ba hệ thống bỏ bớt một nguồn chỉ tốn bước trộn. Trước mắt, thực nghiệm tập trung vào HIST.
@@ -292,7 +294,7 @@ Cell `judge-analysis` có thêm bảng nhóm nguyên nhân theo chunk doc: (1) D
 - Thời gian ước tính: `doc-links-v2` khoảng 1 giờ, `hist-build` khoảng 1,5 giờ, `scale-run` vài giờ, và batch judge thường vài giờ, tối đa 24 giờ. Kaggle giới hạn 12 giờ mỗi lần chạy.
 - Đề xuất chạy hai lượt. Lượt 1 chạy từ đầu tới `judge-pool`, rồi Save Version. Lượt 2 chạy `judge-run`, `judge-analysis`, `eval-v3` và Section 7.
 - **Batch theo số instance.** Tier 1 giới hạn 10 triệu token đang xếp hàng. Lượt đầu bị lỗi 429 vì một batch khoảng 28 triệu token. `judge-run` giờ chia request thành nhiều phần, mỗi phần gồm mọi request của 150 instance (`JUDGE_BATCH_INSTANCES`). Các phần được gửi lần lượt.
-- **Chạy lại không trả tiền hai lần.** Tên và job của mỗi phần được ghi vào `judge_v3/batch_jobs.txt`. Khi chạy lại, cell chờ và lấy kết quả của batch đã gửi. Request đã có nhãn trong `labels_<model>.jsonl` không bị gửi lại. Riêng khi mở phiên Kaggle mới hoặc chạy Save Version, `/kaggle/working` bị xóa và mất file nhãn. Khi đó mọi request sẽ bị gửi lại, trừ khi bật Persistence hoặc nạp lại file nhãn từ một dataset.
+- **Chạy lại không trả tiền hai lần.** Tên và job của mỗi phần được ghi vào `judge_v3/batch_jobs.txt`. Khi chạy lại, cell chờ và lấy kết quả của batch đã gửi. Request đã có nhãn trong `labels_<model>.jsonl` không bị gửi lại. Hai file này nằm trong `/kaggle/working`. Thư mục này vẫn còn khi mở phiên Kaggle mới (`experiment_log.md`, các lượt ngày 27/10 và 28/10), nên lần chạy ở phiên sau cũng không gửi lại.
 - **Dung lượng.** 86 graph của hai repo chiếm khoảng 9 GB. File mới của lượt v3 ước tính dưới 1 GB. Graph của 10 repo còn lại vẫn nằm trên đĩa.
 
 ### 7.9 Kết quả v3 (tập test, 1.006 instance, gộp hai repo; thực nghiệm khám phá)
@@ -365,17 +367,45 @@ Có ba độ đo chính:
 
 ## 8. Kết luận hiện tại
 
-- **Kết luận hẹp (có cơ sở):** Trên 1.006 instance test thuộc Django và SymPy, hệ thống AST+DOC+HIST v3 tăng any-gold Hit@10 từ 57,3% lên 62,4%. Trên dữ liệu gộp, ΔnDCG@10 có bootstrap CI dương, còn ΔHit@10 và ΔRR@100 vẫn có ý nghĩa sau Holm. Kết quả cung cấp bằng chứng cho cấu hình cụ thể trên hai repository, chưa chứng minh khả năng khái quát sang repository khác hoặc khả năng định vị đầy đủ mọi gold của một issue.
-- **Kết luận hẹp vẫn đúng với oracle mới (lượt 1 của v4, 16/10/2026).** Trên 1.187 instance, Top@10 của DOC+HIST v3 tăng từ 55,5% (AST) lên 61,2%. Trên các instance không thuộc Lite, tức tập test của v3, Top@10 tăng từ 57,6% lên 63,2%. Chi tiết ở mục 9.1.
-- **HIST theo Locus chưa có kết quả hệ thống.** Danh sách của nó chưa được trộn với AST, vì cách trộn chưa chốt. Khi đứng riêng, bản đầy đủ có thành phần Fix kém hơn AST ở Django (43,1% so với 56,6%).
-- **Kết luận rộng (chưa chứng minh):** "Dữ liệu đa nguồn nói chung tốt hơn chỉ dùng code" còn thiếu bốn điều kiện: một tập giữ lại chưa dùng khi thiết kế, nhiều repo hơn, oracle đã sửa và kiểm tra lại, và đo được sai lệch của snapshot. Nguồn **issue** cũng chưa được đưa vào.
-- **Mức tăng còn vừa phải.** Các hệ thống có nhiều thay đổi xấu nhỏ, và không cứu được gold ở sâu trong xếp hạng AST.
+- **Kết luận về xếp hạng (lượt v4-L8, 28/10/2026).** Lượt này chạy trên cả 12 repo của tập test SWE-bench, và đánh giá 2.214 instance có gold. Cách trộn là RRF gốc với trọng số bằng nhau và k = 60, nên không tham số nào được chọn trên dữ liệu (quyết định 57). "Có ý nghĩa" ở đây là có ý nghĩa sau hiệu chỉnh Holm. Chi tiết ở mục 10 của `experiment_log.md`.
+  - Thêm HIST giúp định vị tốt hơn chỉ dùng code ở mọi độ đo. So với AST, +HIST tăng Top@1 từ 22,4% lên 26,4%, Top@10 từ 54,2% lên 59,3%, MRR từ 0,331 lên 0,375 và MAP từ 0,247 lên 0,283. Mọi mức tăng đều có ý nghĩa. ΔMRR của +HIST dương ở cả 12 repo. Thêm HIST vào DOC và ISSUE cũng tốt hơn có ý nghĩa ở mọi độ đo. +HIST là hệ thống tốt nhất ở Top@1, Top@5 và MRR.
+  - Đủ bốn nguồn (+ALL) không tốt hơn AST. Top@10 chỉ tăng từ 54,2% lên 55,6%, và mức tăng này không có ý nghĩa. Top@1 giảm còn 18,5%, MRR giảm còn 0,306 và MAP giảm còn 0,228, đều có ý nghĩa. Ở mức file, +ALL kém AST có ý nghĩa ở Top@1, Acc@1, Acc@3, MRR và MAP.
+  - Ở lượt v4-L7 trên Django và SymPy, +ALL tốt hơn AST có ý nghĩa ở Top@10 (55,5% lên 59,6%). Kết luận này không còn đúng khi chạy đủ 12 repo.
+  - DOC và ISSUE đứng riêng làm kết quả kém hơn AST có ý nghĩa ở mọi độ đo. Top@10 của +DOC là 39,5%, và của +ISSUE là 44,4%. Khi đã có HIST và ISSUE, thêm DOC làm Top@1 giảm 1,6 điểm, có ý nghĩa. Khi đã có DOC và HIST, thêm ISSUE làm Top@10 giảm 1,9 điểm và Acc@10 giảm 3,1 điểm, có ý nghĩa.
+  - Nguyên nhân là danh sách của DOC và ISSUE yếu hơn danh sách của AST nhiều, nhưng RRF gốc cho mọi danh sách lá phiếu ngang nhau. Bài của Cormack không thử trường hợp này. Phân tích chi tiết của judge cho thấy cơ chế. Danh sách của một nguồn chỉ giúp khi bằng chứng của nguồn đó dẫn tới gold. Khi bằng chứng không dẫn tới gold, danh sách đẩy các hàm/lớp khác gold lên trên.
+  - +ALL giúp ở ca khó và gây hại ở ca dễ. Khi gold đã ở top 10 của AST, +ALL làm 50,9% instance kém hơn. Khi gold ở hạng 11 đến 100, +ALL làm 67,7% instance tốt hơn.
+  - Trong HIST, CE (khớp tên code) đóng góp nhiều nhất, và Fix không thêm gì. CE chỉ giúp khi issue nêu tên gold.
+  - Số node phải đọc của +ALL và của +HIST không khác AST có ý nghĩa. Thêm HIST vào DOC và ISSUE giảm số node phải đọc có ý nghĩa ở mọi k.
+  - Kết luận này gắn với cách trộn đã chốt, trên 12 repo của tập test.
+- **Vai trò của graph trong kết quả hiện tại.** Từ lượt v4-L8, DOC và GRAPH đi trên cạnh của graph theo công thức của KGCompass (quyết định 59). DOC (`doc_kgc`) đi từ đích cạnh `Documents` của 10 chunk trong `doc_cand`. GRAPH đi từ 10 node đầu của AST theo cạnh code. HIST và ISSUE là tìm kiếm văn bản rồi nối kết quả với hàm/lớp theo id, nên không đi trên graph. Commit và issue cũ vẫn nằm ở file riêng, chưa thành node của graph (mục 9.3 và 9.4).
+  - GRAPH đứng riêng không đạt tiêu chí đặt trước (G1). +GRAPH kém AST có ý nghĩa ở Top@1, Top@5, Acc@5, MRR và MAP.
+  - Thêm GRAPH vào +ALL tốt hơn có ý nghĩa ở mọi độ đo (G2). +ALL+GRAPH có Top@10 cao nhất (60,0%), nhưng vẫn kém +HIST ở Top@1, MRR và MAP. Có một giả thuyết chưa được kiểm tra. GRAPH đi từ 10 node đầu của AST, nên thêm GRAPH có thể chỉ trả lại phần lá phiếu của AST mà DOC và ISSUE đã làm loãng.
+  - DOC theo KGCompass vẫn kém AST có ý nghĩa ở mọi độ đo (Q1). Với cách trộn có trọng số trước đây, trọng số của DOC luôn ở mức nhỏ nhất của lưới.
+  - Độ đo độ sâu vốn có lợi cho DOC ở độ sâu 1. Dù vậy, DOC không đưa top 10 lại gần gold hơn AST (8,8% so với 10,3% node ở độ sâu 1).
+  - Ảnh hưởng của độ phủ doc được đo ở mức repo và mức instance (quyết định 60, mục 13.6). Độ phủ doc của repo không liên quan tới hiệu quả của +DOC (C1). Ở mức instance, việc gold có cạnh `Documents` quyết định hiệu quả của DOC (C2, Holm 0,0002). Khi gold có doc, MRR của +DOC giảm 0,039 so với AST. Khi gold không có doc, MRR giảm 0,162. Đối chứng âm +HIST không khác giữa hai nhóm. Chỉ 27,6% instance có gold có doc.
+  - Như vậy việc cạnh `Documents` có tới gold hay không là một nguyên nhân chính làm DOC kém. Trung bình theo instance, cạnh này chỉ phủ 10,7% hàm/lớp của snapshot.
+  - Phần tăng chắc chắn của đa nguồn vẫn đến từ tìm kiếm trên history.
+- **Bằng chứng theo judge (lượt v4-L8).** Judge xem bản vá thật và chấm từng phần tử bằng chứng. Chi tiết ở mục 10 của `experiment_log.md`, gồm cả phần phân tích chi tiết của judge.
+  - Tỷ lệ instance có ít nhất một phần tử hữu ích trong 10 phần tử đầu là 37,8% với DOC, 68,7% với HIST và 73,7% với ISSUE. Ở lượt v4-L6 trên hai repo, các tỷ lệ này là 46,2%, 74,1% và 77,7%.
+  - Mỗi nguồn cho một loại thông tin riêng. DOC chủ yếu cho hành vi mong đợi và cách dùng API. HIST cho vị trí code và thay đổi trước đây. ISSUE cho vị trí code, lỗi tương tự và nguyên nhân lỗi.
+  - Phần tử hữu ích tập trung ở đầu danh sách. Ở cả ba nguồn, tỷ lệ hữu ích giảm dần theo vị trí trong pool.
+  - Khi chấm lại cùng phần tử với thứ tự xáo khác, κ của nhãn hữu ích là 0,610 với DOC, 0,656 với HIST, 0,634 với ISSUE và 0,646 khi gộp. Mẫu chấm lặp gồm 130 instance của mọi repo.
+  - Nhãn hữu ích nhất quán với việc phần tử nối tới gold, vì tỷ lệ phần tử nối gold tăng theo điểm hữu ích. Tuy vậy, phần lớn phần tử hữu ích không nối tới gold. Tỷ lệ không nối là 77,1% với DOC, 62,3% với HIST và 67,1% với ISSUE.
+  - Trộn chỉ giúp khi bằng chứng hữu ích nối tới gold. Ở nhóm instance này, ΔMRR so với AST là +0,167 với HIST, +0,092 với ISSUE và +0,002 với DOC. Khi bằng chứng hữu ích không nối tới gold, nguồn không tốt hơn so với khi không có phần tử hữu ích nào.
+  - 91,4% instance có phần tử hữu ích từ ít nhất một nguồn. Khi AST không có gold trong top 10, tỷ lệ này là 87,2%.
+  - Như vậy DOC và ISSUE không giúp xếp hạng, nhưng vẫn cung cấp loại thông tin mà HIST hiếm khi có. Phần lớn thông tin đó không phải vị trí code, nên RRF không dùng được.
+- **Kết quả cũ, với cách trộn có tham số chọn trên dữ liệu.** Các kết quả này không còn là kết luận hiện tại.
+  - Lượt v3 chọn p và h trên tập dev. Trên 1.006 instance test, AST+DOC+HIST v3 tăng any-gold Hit@10 từ 57,3% lên 62,4%.
+  - Lượt 1 của v4 (16/10/2026) giữ cấu hình trộn của v3 và dùng oracle mới. Top@10 của DOC+HIST v3 tăng từ 55,5% lên 61,2% (mục 9.1).
+  - Các lượt v4-L4 đến v4-L6 (22/10 đến 27/10/2026) chọn trọng số bằng kiểm định chéo. Khi đó +ALL tốt hơn AST ở mọi độ đo chính, ví dụ Top@10 tăng từ 55,5% lên 62,2% (mục 9.5). Với RRF gốc, kết luận về +ALL đổi chiều ở Top@1 và MAP.
+- **Kết luận rộng (chưa chứng minh).** Câu "dữ liệu đa nguồn nói chung tốt hơn chỉ dùng code" chưa được chứng minh. Với cách trộn đã chốt, trên 12 repo, đủ nguồn không tốt hơn AST có ý nghĩa ở độ đo nào, và kém hơn ở Top@1, MRR và MAP. Sai lệch của snapshot chưa được đo.
+- **Mức tăng còn vừa phải.** +HIST, hệ thống tốt nhất, vẫn làm 26,6% instance kém hơn AST. Với +HIST, Acc@10 chỉ đạt 34,2%, tức phần lớn instance chưa có đủ mọi gold trong top 10.
 - **Kết luận theo gold của lượt v2 vẫn giữ** cho hệ thống v2 đã chạy. Kết luận theo judge của lượt v2 đã được thay bằng kết quả v3.
 - **Phân tích dựa trên nhãn commit của v3 không dùng được**, vì judge chỉ thấy message.
 
-## 9. Thiết kế lượt v4 (đang hiện thực; thực nghiệm khám phá trên Django và SymPy)
+## 9. Thiết kế lượt v4 (thực nghiệm trên Django và SymPy)
 
-**Lộ trình đã thống nhất (14/10/2026).** Giai đoạn 0: sửa tài liệu. Giai đoạn 1: sửa oracle và kiểm tra lại (1.1), tính lại với quy tắc thống kê thống nhất và xếp hạng tới 500 (1.2), kiểm tra snapshot trên 100 instance (1.3). Giai đoạn 1.5: tìm hiểu bài báo và dữ liệu cho ISSUE. Giai đoạn 2: hoàn thiện v4 (HIST theo Locus, thêm +ISSUE, đóng băng luồng xử lý và manifest). Giai đoạn 3: xác nhận trên repo giữ lại lấy từ split train của SWE-bench (37 repo không trùng với tập test). Giai đoạn 4: viết luận văn.
+**Lộ trình đã thống nhất (14/10/2026).** Giai đoạn 0: sửa tài liệu. Giai đoạn 1: sửa oracle và kiểm tra lại (1.1), tính lại với quy tắc thống kê thống nhất và xếp hạng tới 500 (1.2), kiểm tra snapshot trên 100 instance (1.3). Giai đoạn 1.5: tìm hiểu bài báo và dữ liệu cho ISSUE. Giai đoạn 2: hoàn thiện v4 (HIST theo Locus, thêm +ISSUE, đóng băng luồng xử lý và manifest). Giai đoạn 3: xác nhận trên repo giữ lại lấy từ split train của SWE-bench (37 repo không trùng với tập test). Giai đoạn 4: viết luận văn. Từ ngày 27/10/2026, đề tài không còn giai đoạn xác nhận trên repo giữ lại, và không đóng băng luồng xử lý để xác nhận (quyết định 58).
 
 **Hệ thống so sánh của v4:** AST, +DOC, +HIST, +ISSUE, +DOC+HIST+ISSUE, và ba hệ thống bỏ bớt một nguồn.
 
@@ -389,7 +419,7 @@ Kế hoạch đầy đủ nằm ở `planning.md`. Thiết kế kỹ thuật c�
 2. **Điểm.** score(b, f) = max_{h ∈ H(f)} {NL(b, h) + α·CE(b, h)} + β₁·Fix(f). NL và CE là cosine trong mô hình vector với trọng số (log f + 1)·log(N / n_t). α tăng theo tỷ lệ tên code trong issue, với λ = 5. Fix(f) cộng điểm cho hàm/lớp từng bị sửa lỗi, nhiều hơn khi lần sửa gần đây, với β₁ = 0,1.
 3. **Chuyển sang mức hàm/lớp.** H(f) là các hunk có dòng đổi nằm trong f, theo oracle mới. Bảy chỗ chuyển đổi so với bài gốc được ghi ở mục 6.4 của `planning.md`.
 4. **Không có LLM và không có tham số chọn bằng dữ liệu.** LLM chỉ là judge. λ và β₁ lấy từ bài. Thiết kế `hist-llm` cũ, trong đó LLM viết ý đồ commit, nêu giả thuyết rồi liệt kê hàm/lớp, đã bị bỏ.
-5. **Trộn.** Danh sách hàm/lớp được trộn với AST. Cách trộn chưa chốt.
+5. **Trộn.** Danh sách hàm/lớp được trộn với AST. Từ ngày 27/10/2026, cách trộn là RRF gốc với trọng số bằng nhau (quyết định 57).
 
 **Các phần khác**
 
@@ -516,16 +546,59 @@ Cơ sở là graph của Abedu và cộng sự (TOSEM), với các cạnh Fixed 
 5. **Mốc thời gian của ISSUE** cắt theo thời điểm tạo báo cáo của chính instance, thay cho thời điểm tạo PR.
 6. **Tìm nguyên nhân Fix làm giảm danh sách HIST ở Django.**
 
+> Tình trạng ngày 22/10/2026. Ý 1 đã thử ở lượt v4-L2b và được thay bằng RRF có trọng số theo nguồn (mục 9.5). Ý 2 và 3 chưa làm: commit và issue cũ vẫn nằm ở file riêng, chưa thành cạnh của graph. Ý 4 và 5 được giữ làm mặc định (quyết định 44 và 50). Ý 6 đã làm ở bước D (mục 9.5).
+
+### 9.5 Kết quả lượt đầy đủ của v4 (22/10/2026)
+
+> Tình trạng ngày 29/10/2026. Mục này ghi kết quả của lượt v4-L4 và được giữ làm lịch sử. Cách trộn có trọng số của lượt này đã bị bỏ ngày 27/10/2026 (quyết định 57). Nhãn judge đã được phân tích ở các lượt sau. Kết quả hiện tại là lượt v4-L8 trên 12 repo, nằm ở mục 8 của file này và mục 10 của `experiment_log.md`.
+
+Lượt v4-L4 chạy trên 1.187 instance, với đủ bốn nguồn. Bảng đầy đủ, thời gian và sự cố của các lượt v4 nằm ở `experiment_log.md`.
+
+**Cách trộn.** RRF có trọng số theo nguồn: score(d) = 1/(60 + hạng AST) + Σ_s w_s/(60 + hạng trong nguồn s). Trọng số được chọn bằng kiểm định chéo 5 phần theo MAP. Trọng số đã chọn rất ổn định giữa các phần. DOC luôn ở 0,05, là giá trị nhỏ nhất của lưới. HIST ở 0,75 đến 1,5, tức ngang AST. ISSUE ở 0,05 đến 0,2. Từ ngày 27/10/2026, cách trộn này bị bỏ, và v4 dùng RRF gốc với trọng số bằng nhau (quyết định 57).
+
+**Mức hàm/lớp, gộp hai repo.**
+
+| Hệ thống | Top@1 | Top@10 | MRR | MAP |
+|---|---|---|---|---|
+| AST | 23,8 | 55,5 | 0,344 | 0,265 |
+| +DOC | 22,4 | 56,4 | 0,340 | 0,259 |
+| +HIST | 27,5 | 62,1 | 0,390 | 0,306 |
+| +ISSUE | 24,3 | 56,7 | 0,355 | 0,272 |
+| +ALL | 27,7 | 62,2 | 0,392 | 0,308 |
+| ALL−DOC | 28,7 | 62,3 | 0,398 | 0,312 |
+
+**Trả lời các câu hỏi.**
+- Q4: +ALL tốt hơn AST ở Top@1, Top@5, Top@10, MRR và MAP, có ý nghĩa sau Holm. 584 instance tốt hơn và 303 instance kém hơn.
+- Q2 và Q6: HIST giúp khi đứng riêng, và vẫn thêm giá trị khi đã có DOC và ISSUE.
+- Q1 và Q3: DOC và ISSUE chỉ tăng Top@10 (0,8 và 1,2 điểm, có ý nghĩa). MRR và MAP không đổi có ý nghĩa.
+- Q5 và Q7: DOC và ISSUE không thêm gì khi đã có HIST.
+- Ở mức file, +HIST và +ALL tăng Top@1 (5,6 và 4,3 điểm), MRR và MAP, có ý nghĩa. Top@10 mức file không đổi có ý nghĩa, vì AST đã đạt 85,6%.
+
+**Phân tích phụ.**
+- Phần tăng đến từ ca khó. Với gold ở hạng 11 đến 100 của AST, +ALL làm 76,3% instance tốt hơn. Với gold ngoài hạng 100, tỷ lệ này là 54,1%, so với 17,3% kém hơn.
+- Trong HIST, CE (khớp tên code) đóng góp nhiều nhất: Top@10 là 59,2 khi chỉ dùng NL và 62,3 khi dùng NL+CE. Fix không thêm gì sau khi trộn (62,1).
+- Bước D cho thấy Fix kéo hàm bị sửa nhiều lần lên đầu danh sách ở Django. Trung vị số lần bị sửa của 10 hàm/lớp đầu tăng từ 6,5 lên 37,5 khi có Fix. Đổi A3 giảm được một phần thiệt hại nhưng không xóa hết.
+- Liên kết "Refs" của Django không giúp. Mức trần của ISSUE là 83,2% (Django) và 63,4% (SymPy).
+- RRF trọng số bằng nhau (lượt v4-L2b) làm +DOC và +ISSUE kém hơn AST rõ rệt. Ví dụ, Top@10 của +DOC giảm còn 43,7%. Trộn có trọng số sửa được thiệt hại này. Cách trộn có trọng số đã bị bỏ ngày 27/10/2026 (quyết định 57).
+
+**Judge.** 3.561 trên 3.561 request bằng chứng có nhãn. Nhãn chưa được phân tích. Bảng bằng chứng (bước I) đã được cài ngày 22/10, và sẽ có số liệu ở lượt Kaggle tiếp theo.
+
+**Độ lặp lại.** Hai lần dựng lại toàn bộ trên Kaggle chỉ lệch khoảng 1 instance trên 1.187, do thứ tự node bằng điểm trong `_rrf`. Từ ngày 22/10, `_rrf` xếp node bằng điểm theo id.
+
 ## 10. Notebook và môi trường
 
-- Notebook hiện có 54 cell. Phần v4 nằm ở cuối, gồm `v4-md`, `v4-config`, `v4-run`, `hist-proc` và `v3-recheck`.
-- Cờ `RUN_V3` ở cell cấu hình đầu notebook chặn 11 cell chỉ phục vụ v3. Các cell đó có dòng đầu là `%%v3`. Khi `RUN_V3 = False`, chúng chỉ in một dòng rồi bỏ qua.
-- Notebook trong repo đang chứa output của lượt 1 trên Kaggle.
+- Từ ngày 27/10/2026, notebook có 45 cell và chỉ chứa code của pipeline v4. Phần v4 nằm ở cuối, gồm `v4-md`, `v4-config`, `v4-run`, `hist-proc`, `issue-fetch`, `issue-index`, `v4-fusion`, `judge-v4`, một cell trống, `verify-v4`, `depth-v4` và `manifest`. Cell `verify-v4` được tạo lại trên Kaggle, nên mang id mới `744cae31-2884-4a39-b41f-eb642ad52ce5`.
+- Ngày 27/10/2026, code của v3 bị bỏ khỏi notebook. Đó là 11 cell `%%v3`, cờ `RUN_V3` và các prompt của judge v3. Ba cell chỉ để phân tích cũng bị bỏ, gồm `v3-recheck`, `gpu_cuda_check` và `hist-fix-check` (quyết định 56).
+- Notebook trong repo đang chứa output của lượt v4-L7 trên Kaggle (27/10/2026), và đang chứa `GOOGLE_API_KEY` thật. Không commit khi key còn trong file.
+- Ngày 27/10/2026, cell `cell-files` bị mất trong bản notebook quay về từ lượt v4-L6, rồi được khôi phục từ bản sao lưu. Cell này định nghĩa `_SKIP_DIRS`, `_SKIP_FILES` và `get_python_files`. Thiếu cell này thì `v4-run` dừng với lỗi `NameError` khi phải tính instance mới.
+- `manifest` và dấu cách tính của `issue-index` lấy mã của cell từ biến `In` của IPython. Ở lượt v4-L6, `In` rỗng, nên manifest ghi 0 cell và dấu cách tính chỉ dựa trên cấu hình. Ở lượt v4-L7, `In` có đủ mã cell, và manifest ghi 31 cell. Cả hai lượt đều chạy bằng Run All trong editor của Kaggle, và nguyên nhân chưa rõ. Cả hai cell không báo lỗi khi `In` rỗng.
+- `GITHUB_TOKEN` ở `v4-config` là biến thường, để trống. Không có token thì `issue-fetch` tải SymPy mất khoảng 5 giờ. File báo cáo đã tải nằm ở `/kaggle/working/v4/issues/`, nên các lượt sau bỏ qua việc tải.
 
 - `WORK_DIR` là `/kaggle/working`, được lưu khi Save Version. `REPO_DIR` là `/tmp/repos`, không được lưu.
 - `judge-config` chứa API key dạng biến thường `GOOGLE_API_KEY`. Trong repo, biến này để trống. Cần dán key trước khi chạy judge, và xóa key trước khi commit.
 - Gemini API trên project có billing cần prepaid credit. Batch API rẻ hơn 50%.
 - File kết quả: `scale_rows_v2.jsonl` và `judge/` (lượt v2); `scale_rows_v3.jsonl`, `history/` và `judge_v3/` (lượt v3); `v4/scale_rows_v4.jsonl`, `history/<repo>_history_v2.jsonl` và `history/<repo>_hunks_v2.jsonl` (lượt 1 của v4).
+- File thêm từ ngày 21/10: `v4/issues/<repo>_reports.jsonl` (báo cáo cũ), `v4/issues/<repo>_links.jsonl` (cặp báo cáo và commit kèm loại liên kết), `v4/fusion.json` (cấu hình trộn), `judge_v4/` (request, pool, nhãn và `batch_jobs.txt`). File kết quả cũ được đổi tên thành `v4/scale_rows_v4_truoc_buoc_A.jsonl` khi `v4-run` dựng lại.
 
 ## 11. Lịch sử các quyết định chính
 
@@ -546,13 +619,13 @@ Cơ sở là graph của Abedu và cộng sự (TOSEM), với các cạnh Fixed 
 15. Quy trình debug của developer được xác định là hình mẫu để thiết kế luồng history, không phải mục tiêu của đề tài.
 16. Bước 0 chọn F = 5 file, m = 10 commit mỗi file và trần C = 1.500 token mỗi commit, bằng phép đo độ phủ.
 17. Mọi quyết định kỹ thuật phải có bài báo tương tự làm cơ sở. Đã đọc 18 bài và tổng hợp trong artifact "Tổng quan tài liệu RepoGraph". Lần đọc toàn văn đã đính chính hai điểm. Thứ nhất, ROSE đạt 64% ở mức hàm chứ không phải hơn 70%. Thứ hai, trong HAFix, diff thô thường làm kết quả kém hơn.
-18. Bản đánh giá độc lập (17 điểm) được chấp nhận sau khi kiểm chứng trên code. Phạm vi khẳng định thu hẹp về kết luận hẹp ở mục 8. V3 và v4 trên 1.006 instance được ghi là thực nghiệm khám phá.
-19. Nguồn ISSUE được đưa vào v4. Muốn có kết luận rộng thì phải xác nhận trên repo giữ lại với luồng xử lý đã đóng băng.
+18. Bản đánh giá độc lập (17 điểm) được chấp nhận sau khi kiểm chứng trên code. Phạm vi khẳng định thu hẹp về kết luận hẹp ở mục 8. V3 và v4 trên 1.006 instance được ghi là thực nghiệm khám phá. Phần "thực nghiệm khám phá" được thay bằng quyết định 58.
+19. Nguồn ISSUE được đưa vào v4. Muốn có kết luận rộng thì phải xác nhận trên repo giữ lại với luồng xử lý đã đóng băng. Phần xác nhận trên repo giữ lại được thay bằng quyết định 58.
 20. LLM chỉ là judge, như đã nêu từ đầu. Thiết kế `hist-llm` bị bỏ. Cách xếp hạng của HIST được chọn lại từ bài báo và không dùng LLM. Tham số C bị bỏ theo.
 21. Không tách dev và test. Mọi bước chọn tham số và mọi kết quả dùng cả 1.187 instance.
 22. Phần phụ trợ được giữ đơn giản. Kết quả được trình bày theo mục 6.8 của `planning.md`, kèm một kiểm định McNemar cho Top@10.
 23. HIST xếp hạng theo Locus ở mức hàm/lớp, với 7 chỗ chuyển đổi ghi ở mục 6.4 của `planning.md`. F và m bị bỏ.
-24. Các cell chỉ phục vụ v3 được chặn bằng cờ `RUN_V3` và magic `%%v3`.
+24. Các cell chỉ phục vụ v3 được chặn bằng cờ `RUN_V3` và magic `%%v3`. Quyết định này được thay bằng quyết định 56.
 25. Lượt 1 của v4 xác nhận kết luận hẹp với oracle mới.
 26. Mục tiêu chính không phải tìm nguồn mạnh nhất, nhưng các nguồn vẫn được so với nhau để thống kê và điều chỉnh.
 27. Trong graph, commit và issue cũ được gom vào nhóm History. Node của issue cũ tên là Issue.
@@ -564,6 +637,31 @@ Cơ sở là graph của Abedu và cộng sự (TOSEM), với các cạnh Fixed 
 33. Giữ toàn bộ khung so sánh với AST, gồm các mức hop và các cách kết hợp nguồn. Giữ Q1 đến Q7.
 34. Judge bằng chứng ghi thêm loại thông tin mà phần tử cung cấp.
 35. Định hướng của các quyết định 28 đến 34 nằm ở mục 12.
+36. Input của hệ thống là một prompt bất kỳ trên repository (issue, câu hỏi, yêu cầu tìm code hay doc). Phân tích issue chỉ là một use case.
+37. Thực nghiệm hiện tại chỉ tập trung vào kiến trúc retrieval. Use case được đánh giá là issue trên SWE-bench.
+38. Đánh giá phần AST ở hai mức: hàm/lớp là mức chính, file là mức phụ. Xếp hạng file suy từ điểm cao nhất của hàm/lớp trong file, theo SweRank.
+39. Phần bằng chứng được đánh giá bằng một pool 10 phần tử đầu mỗi loại, chấm một lần, với Precision, Recall, F1, bảng trả rỗng và số token. Mốc so sánh là hạn ngạch cố định.
+40. Loại thông tin của judge: một danh sách chung, nhiều nhãn, bảy loại theo Ko và cộng sự (ICSE 2007) cộng hai nhãn loại trừ.
+41. Thêm request "đủ thông tin cho cả tập" theo Sufficient Context, chỉ cho Q4, sau khi đo chi phí trên 50 instance.
+42. Kiểm định: McNemar cho độ đo đúng/sai, hoán vị ghép cặp cho độ đo liên tục, Holm trong từng độ đo. Thay cho quyết định 22.
+43. Chi tiết của các quyết định 38 đến 42 nằm ở mục 13.
+44. Mốc cắt của ISSUE là thời điểm tạo báo cáo của chính instance (`ISSUE_CUTOFF = "instance"`). Khi nhận ra nhiều báo cáo, mốc là báo cáo mới nhất tạo trước `created_at`. Khi không nhận ra báo cáo nào, mốc là `created_at` (21/10/2026).
+45. `issue-fetch` tải issue của SymPy bằng phân trang con trỏ, vì GitHub chỉ nhận tham số `page` cho 1.000 mục đầu (21/10/2026).
+46. Cách trộn là RRF có trọng số theo nguồn, chọn bằng kiểm định chéo 5 phần theo MAP. RRF trọng số bằng nhau được giữ làm hệ thống đối chứng. Lý do là ở lượt v4-L2b, RRF trọng số bằng nhau làm nguồn yếu kéo kết quả xuống (22/10/2026). Quyết định này được thay bằng quyết định 57.
+47. Bằng chứng HIST đưa cho judge giữ đủ danh sách hàm/lớp mà commit đã sửa. Hunk của commit sửa hơn 50 hàm/lớp bị bỏ khỏi bằng chứng, theo ROSE và `HIST_MAX_TOUCH`. Xếp hạng HIST không đổi (22/10/2026).
+48. Không chạy thử judge riêng trên vài chục instance. Prompt judge bằng chứng giữ như bản đã cài (21/10/2026).
+49. Để kết quả lặp lại được, `_rrf` xếp node bằng điểm theo id, `issue-index` tự tính lại khi cấu hình hoặc cách tính đổi, và `v4-run` tự dựng lại file kết quả khi dữ liệu cũ không còn khớp (22/10/2026).
+50. Liên kết Django chỉ dùng "Fixed #N". Lượt v4-L4 cho thấy thêm "Refs #N" không giúp (22/10/2026).
+51. Kết quả của mọi lượt chạy được ghi ở `experiment_log.md`, theo một mẫu chung, để theo dõi giữa các lượt (22/10/2026).
+52. Judge không viết lý do và dùng mức thinking MINIMAL. Lý do là không phần phân tích nào đọc lý do, và lý do chiếm khoảng một nửa số ký tự output (26/10/2026).
+53. Judge không chấm node code nữa. nDCG@10 theo judge được thay bằng độ đo theo cấu trúc: số node phải đọc trước khi gặp gold và độ sâu tới gold trên graph code, theo Renieris và Reiss (ASE 2003). Lý do là judge chấm node code mà không thấy bản vá, và phần này chiếm phần lớn token (26/10/2026).
+54. Lượt chạy tới chấm lại toàn bộ bằng chứng với cài đặt judge mới, để mọi nhãn bằng chứng có cùng một cài đặt (26/10/2026).
+55. Đợt xác nhận chạy trên 10 repo còn lại của tập test SWE-bench, gồm 1.058 instance. Pipeline được khóa, và trọng số trộn được chọn trên Django và SymPy. Câu hỏi về DOC được báo riêng trên 7 repo có độ phủ doc từ 5%. Chi tiết ở mục 6.14 của `planning.md` (26/10/2026). Phần trọng số được thay bằng quyết định 57. Phần đợt xác nhận và khóa pipeline được thay bằng quyết định 58. Phần báo riêng câu hỏi về DOC trên nhóm 5% được thay bằng quyết định 60.
+56. Notebook chỉ chứa code của pipeline. Phân tích chỉ dùng một lần chạy ngoài notebook, và kết quả được ghi vào tài liệu. Code của v3 và các cell chỉ để phân tích bị bỏ khỏi notebook. Lý do là mỗi lượt Run All trên Kaggle chạy lại các cell này, tốn thời gian, và có thể dừng khi gặp lỗi. Chi tiết ở mục 6.15 của `planning.md` (27/10/2026).
+57. Cách trộn là RRF gốc của Cormack và cộng sự (SIGIR 2009), với mọi danh sách có trọng số 1 và k = 60. Không tham số nào được chọn trên dữ liệu của đề tài, kể cả bằng kiểm định chéo. Lý do là đề tài không huấn luyện model, nên không khớp tham số theo dữ liệu. Giới hạn là bài của Cormack không thử trộn một danh sách mạnh với các danh sách yếu hơn nhiều. Ở lượt v4-L2b, cách này làm DOC và ISSUE kéo kết quả xuống. Kết luận về xếp hạng sẽ được viết lại theo số của lượt Kaggle đầu tiên dùng RRF gốc. Chi tiết ở mục 8 của `pipeline_design.md` (27/10/2026).
+58. Không chia dữ liệu thành dev và test, train và test, hay đợt chính và đợt xác nhận. Lý do là đề tài không huấn luyện model. Tham số lấy từ bài báo, và không tham số nào được chọn trên dữ liệu của đề tài (quyết định 57). Vì vậy kết quả trên Django và SymPy không bị gọi là thực nghiệm khám phá chỉ vì thiếu tập giữ lại. 10 repo còn lại của tập test là thêm dữ liệu cho cùng một thực nghiệm, không phải tập để xác nhận. Quyết định này thay cho phần giữ lại và đóng băng của các quyết định 18, 19 và 55. Quy tắc không đổi phương pháp đã chốt chỉ vì kết quả xấu vẫn giữ nguyên. Cùng ngày, notebook bỏ `V4_PHASE` và chạy 12 repo của tập test như một thực nghiệm. Kết quả của mọi repo ghi chung vào `v4/`, và nhãn judge ghi chung vào `judge_v4/` (27/10/2026).
+59. Node sau hop được xếp theo công thức của KGCompass (arXiv 2503.21710): S(f) = 0,6^l(f) × (0,3 × cos_norm + 0,7 × lev). l(f) là tổng trọng số trên đường ngắn nhất từ issue tới f, với trọng số cạnh lấy từ code công khai của KGCompass (0,25 cho quan hệ chứa và cho issue tới node xuất phát, 0,5 cho `Documents`, 1,0 cho `Calls` và `Inherits`) và ngân sách 4. Có hai danh sách. GRAPH đi từ 10 node đầu của AST. DOC đi từ đích cạnh `Documents` của 10 chunk trong `doc_cand`, và thay cách bỏ phiếu cũ (nhân 0,8, lan một bước nhân 0,5). Lý do là cách bỏ phiếu cũ chưa có cơ sở, còn KGCompass là cách chấm điểm sau hop trong miền code không dùng LLM và không cần huấn luyện. Hai bài KGCompass dẫn, Zhu và Iglesias và Ballatore và cộng sự, chỉ cho ý tưởng suy giảm theo đường đi và cộng tuyến tính hai độ giống, không cho dạng hàm hay giá trị tham số. β và α do tác giả KGCompass chọn trên SWE-bench, và đề tài dùng nguyên giá trị. Có hai câu hỏi mới là G1 (+GRAPH so với AST) và G2 (+ALL+GRAPH so với +ALL), với Holm riêng cho họ này. Tiêu chí được đặt trước khi chạy: GRAPH có giá trị xếp hạng khi +GRAPH tốt hơn AST có ý nghĩa ở ít nhất một độ đo của Bảng 1 mức hàm/lớp và không kém hơn có ý nghĩa ở độ đo nào. Chi tiết ở mục 8b của `pipeline_design.md` (28/10/2026).
+60. Bảng độ phủ doc của `coverage_report.md` được lập để đo độ phủ doc ảnh hưởng thế nào tới hiệu quả. Vì vậy repo có độ phủ thấp được giữ trong thực nghiệm, và độ phủ được phân tích như một biến. Có hai mức. Ở mức repo, C1 là ρ của Spearman giữa độ phủ và mức đóng góp của DOC. Ở mức instance, C2 so mức đóng góp của DOC giữa instance có gold được document và instance không có. +HIST và +GRAPH là đối chứng âm. Nhóm repo có độ phủ từ 5% (`V4_DOC_REPOS`) bị bỏ, vì ngưỡng 5% chưa có bài báo làm cơ sở, việc cắt một biến liên tục thành hai nhóm làm mất thông tin và lực kiểm định (Altman và Royston, BMJ 2006), và nhóm này bỏ đúng phần độ phủ thấp mà câu hỏi cần. Quyết định này thay phần báo riêng câu hỏi về DOC của quyết định 55. Chi tiết ở mục 13.6 (28/10/2026).
 
 ## 12. Định hướng đề tài (thảo luận ngày 18/10/2026)
 
@@ -574,3 +672,73 @@ Cơ sở là graph của Abedu và cộng sự (TOSEM), với các cạnh Fixed 
 - **Ngưỡng.** Ngưỡng thay cho số lượng cố định, và có thể dùng ở ba chỗ: trước khi hop, trước khi vote và trước khi output. Lý do là một instance có thể có 5 đến 10 issue cũ liên quan, hoặc không có issue nào. Khi đó đưa đủ 5 issue không liên quan làm loãng context. Theo ước lượng ở mục 9.2, mức trần của ISSUE sau khi lọc là 83,7% (Django) và 66,9% (SymPy), nên một phần đáng kể instance không có issue cũ nào nối tới gold. Điểm embedding và điểm TF-IDF là cosine, có thang cố định, nên đặt được ngưỡng tuyệt đối. BM25 và RRF không có thang cố định. Cách chọn ngưỡng sẽ được tìm hiểu từ bài báo hoặc kỹ thuật liên quan.
 - **Khung so sánh.** Giữ toàn bộ khung so sánh với AST, gồm các mức hop và các cách kết hợp nguồn. Câu hỏi giữ nguyên Q1 đến Q7 (mục 6.2 của `planning.md`).
 - **Judge bằng chứng.** Ngoài điểm liên quan và điểm hữu ích, judge ghi thêm loại thông tin mà phần tử cung cấp. Danh sách loại chưa chốt.
+- **Phát biểu bài toán (20/10/2026).** Input là một prompt trên repository: issue, câu hỏi, hoặc yêu cầu tìm code hay doc. Hệ thống truy xuất tập ngữ cảnh đa nguồn K(p) gồm code, doc, history và issue cũ, ghép theo loại và lọc bằng ngưỡng. Đánh giá là K(p) có cung cấp đúng thông tin cần cho prompt hay không. Với issue là có tìm được file và hàm cần sửa không. Với hỏi đáp là có tìm đúng thông tin cần không. Phân tích issue chỉ là một use case.
+- **Phạm vi thực nghiệm (21/10/2026).** Thực nghiệm hiện tại chỉ tập trung vào kiến trúc retrieval. Use case được đánh giá là issue trên SWE-bench. Agent, sinh patch và các use case khác nằm ngoài thực nghiệm hiện tại. Tài liệu và phân tích được thu thập cũng chỉ giới hạn ở quy trình retrieval.
+- **Giới hạn khi viết.** Kết quả chỉ khẳng định cho use case issue. HIST theo Locus và ISSUE theo BugLocator có cơ sở bài báo cho báo cáo lỗi, chưa có cho loại prompt khác. Thành phần Fix, việc judge đối chiếu với bản vá, và mốc thời gian chống rò rỉ đang gắn với use case issue. Mức đánh giá cho use case issue (file, hàm/lớp, hay cả hai) chưa chốt.
+
+## 13. Bộ độ đo và phương pháp đánh giá (21/10/2026)
+
+Mục này chốt cách đánh giá output của retrieval cho use case issue. Bài báo làm cơ sở nằm ở mục "Độ đo và kiểm định" của artifact "Tổng quan tài liệu RepoGraph". Cách cài nằm ở mục 6.12 của `planning.md`.
+
+### 13.1 Phần AST: đo bằng gold ở hai mức
+
+- **Mức hàm/lớp là mức chính**, vì output là AST node. **Mức file là mức phụ**, để so được với Locus, AmaLgam, BugLocator, LocAgent và SweRank.
+- Xếp hạng file được suy từ xếp hạng hàm/lớp: điểm của file bằng điểm cao nhất của hàm/lớp nằm trong file, theo SweRank. Gold mức file là các file chứa gold hàm/lớp. Hai mức dùng cùng tập 1.187 instance.
+- Độ đo ở cả hai mức: Top@1, Top@5, Top@10 (any-gold), MRR, MAP (hạng tới 500), và Acc@k (mọi gold nằm trong top k). Acc@k dùng k = 5 và 10 ở mức hàm/lớp, k = 1, 3 và 5 ở mức file, như LocAgent và SweRank.
+- nDCG@10 theo judge cho node code được thay bằng độ đo theo cấu trúc từ ngày 26/10/2026 (quyết định 53). Độ đo mới gồm số node phải đọc trước khi gặp gold, với k = 1, 5 và 10, và độ sâu tới gold của các node trong top 10. Định nghĩa nằm ở mục 10.1 của `pipeline_design.md`.
+
+### 13.2 Phần bằng chứng: chấm một pool, đánh giá mọi ngưỡng ngoại tuyến
+
+- Với mỗi instance và mỗi loại bằng chứng (DOC, HIST, ISSUE), pool là hợp của 10 phần tử đầu mà các hệ thống trả về cho loại đó. Số 10 bằng trần trên của output. Judge chấm mọi phần tử trong pool một lần. Mọi ngưỡng chỉ giữ một phần của pool, nên nhãn đủ để đánh giá mọi ngưỡng mà không gọi judge lại.
+- Một phần tử **hữu ích** khi điểm hữu ích từ 2 trở lên, tức phải đọc hoặc phải sửa theo thang của judge.
+- Độ đo cho mỗi loại, tính theo từng instance rồi lấy trung bình:
+  - Precision: tỷ lệ phần tử được giữ là hữu ích. Chỉ tính trên instance có output khác rỗng.
+  - Recall: tỷ lệ phần tử hữu ích trong pool được giữ. Chỉ tính trên instance có pool chứa phần tử hữu ích.
+  - F1 của hai số trên, trên cùng tập instance với Recall. F1 là độ đo chuẩn của bài toán cắt danh sách (Arampatzis và cộng sự 2009, Choppy, Surprise, Meng và cộng sự 2024).
+  - Trường hợp rỗng: bảng 2×2 giữa "output rỗng hay không" và "pool có phần tử hữu ích hay không". Báo tỷ lệ trả rỗng đúng và tỷ lệ trả rỗng sai.
+  - Chi phí: số token của output mỗi loại, như Adaptive-k và GraphRAG báo.
+- Mốc so sánh là hạn ngạch cố định hiện tại (5 chunk, 5 issue cũ, 10 hunk), vì Meng và cộng sự (2024) cho thấy fixed-k là mốc khó vượt.
+
+### 13.3 Judge
+
+**Loại thông tin.** Một danh sách chung cho mọi loại bằng chứng, gán nhiều nhãn. Bảy loại lấy từ nhu cầu thông tin của developer (Ko, DeLine, Venolia, ICSE 2007) và các thành phần của báo cáo lỗi (Bettenburg và cộng sự). Hai nhãn cuối là nhãn loại trừ, không đi cùng nhãn nào khác.
+
+| Loại | Cơ sở |
+|---|---|
+| Hành vi mong đợi, mục đích của code | Ko: "What is the program supposed to do?", "What is the purpose of this code?"; Bettenburg: expected behavior |
+| Cách dùng API | Ko: "How do I use this data structure or function?" |
+| Triệu chứng và điều kiện lỗi tương tự | Ko: "What does the failure look like?", "In what situations does this failure occur?"; Bettenburg: observed behavior, stack trace, steps to reproduce |
+| Nguyên nhân lỗi | Ko: "What code caused this program state?" |
+| Vị trí code liên quan | Ko: "What code could have caused this behavior?", "What's statically related to this code?" |
+| Lý do thiết kế | Ko: "Why was this code implemented this way?" |
+| Thay đổi trước đây, cách sửa | Ko: "How have resources I depend on changed?"; Locus, HAFix |
+| Không có thông tin mới (loại trừ) | Khung lập luận: thông tin trùng thì tác động bằng 0 |
+| Không liên quan (loại trừ) | |
+
+**Đủ thông tin cho cả tập.** Theo Sufficient Context (Joren và cộng sự, ICLR 2025), judge gán nhãn nhị phân "đủ" hay "không đủ" cho cả tập K(p). Khác với bài gốc, judge được xem bản vá thật, vì use case issue có đáp án. Request này chỉ chạy cho câu hỏi chính Q4 (AST so với +ALL), tức 2 request mỗi instance. Chi phí phải được đo trên 50 instance trước khi chạy hết, vì mỗi request chứa toàn bộ K(p).
+
+**Cài đặt từ ngày 26/10/2026.** Judge chỉ chấm bằng chứng, không viết lý do, và dùng mức thinking MINIMAL (quyết định 52 và 53).
+
+### 13.4 Kiểm định
+
+- McNemar cho độ đo đúng/sai: Top@k, Acc@k, trả rỗng đúng.
+- Kiểm định hoán vị ghép cặp (paired permutation, hay randomization) cho MRR, MAP, số node phải đọc, Precision, Recall và F1. nDCG@10 theo judge cũng dùng kiểm định này cho tới khi bị thay ngày 26/10/2026. Smucker, Allan, Carterette (CIKM 2007) khuyên dùng kiểm định này. Urbano, Lima, Hanjalic (SIGIR 2019) cho thấy t-test và permutation giữ đúng sai số loại I, còn Wilcoxon và sign test thì không. V2 từng dùng Wilcoxon trên log(hạng); v4 bỏ cách đó.
+- Hiệu chỉnh Holm trong từng độ đo, trên 7 câu hỏi.
+- Giới hạn: kiểm định vẫn coi từng instance là độc lập, dù nhiều instance dùng chung snapshot, doc và history.
+
+### 13.5 Thay đổi so với kế hoạch trước
+
+- Quyết định 22 (chỉ một McNemar cho Top@10, không hiệu chỉnh) được thay bằng mục 13.4.
+- Mục 6.8 của `planning.md` được bổ sung mức file, độ đo cho bằng chứng và request đủ thông tin.
+- nDCG@10 theo judge được thay bằng độ đo theo cấu trúc, và judge chỉ chấm bằng chứng (26/10/2026).
+
+### 13.6 Ảnh hưởng của độ phủ doc (28/10/2026)
+
+Mục này đo độ phủ doc ảnh hưởng thế nào tới mức đóng góp của DOC (quyết định 60). Độ phủ doc là tỷ lệ hàm/lớp có cạnh `Documents`, như mục 1 của `coverage_report.md`. Cách cài nằm ở mục 10.2 của `pipeline_design.md`.
+- **Biến.** `doc_cov` là độ phủ của graph snapshot. Độ phủ của một repo là trung bình `doc_cov` trên các instance của repo. `gold_doc` là số gold có cạnh `Documents`.
+- **Kết quả.** Kết quả chính là Δ của +DOC so với AST theo từng instance, ở mức hàm/lớp. Kết quả phụ là +ALL so với ALL−DOC. +HIST và +GRAPH so với AST là đối chứng âm, vì hai nguồn này không đọc doc (Lipsitch, Tchetgen Tchetgen, Cohen, Epidemiology 2010).
+- **C1, mức repo.** ρ của Spearman giữa độ phủ của repo và Δ trung bình của repo, với p tính bằng hoán vị nhãn repo. Cronen-Townsend, Zhou và Croft (SIGIR 2002) dùng kiểm định tương quan hạng Spearman để đo quan hệ giữa một đặc tính và độ chính xác truy hồi, vì không biết phân bố của điểm.
+- **C2, mức instance.** Hiệu Δ trung bình giữa nhóm `gold_doc` ≥ 1 và nhóm `gold_doc` = 0, với p tính bằng hoán vị nhãn nhóm trong từng repo. Cách tách theo một đặc tính của instance theo Kochhar, Tian và Lo (ASE 2014). Hiệu giữa hai nhóm được kiểm định trực tiếp, theo Gelman và Stern (The American Statistician 2006) và Wang và cộng sự (NEJM 2007).
+- **Họ C.** C1 và C2 của +DOC so với AST là một họ, với Holm trong từng độ đo. Kết quả phụ và đối chứng chỉ có p thô.
+- **Tiêu chí ghi trước khi chạy.** "Độ phủ doc ảnh hưởng tới hiệu quả" khi C1 có ρ dương, hoặc C2 cho Δ lớn hơn ở nhóm `gold_doc` ≥ 1, có ý nghĩa sau Holm ở ít nhất một độ đo, và không đối chứng âm nào có ρ có ý nghĩa. Khi đối chứng âm cũng có ý nghĩa, kết quả được ghi là chưa tách được khỏi đặc điểm của repo.
+- **Giới hạn.** 12 repo trải từ 0,2% tới 24,0%, và trên 12,7% chỉ có flask với 11 instance. C1 chỉ có 12 điểm, nên chỉ phát hiện được quan hệ mạnh. Chưa có bài nào đã đọc đo trực tiếp quan hệ giữa độ phủ doc do người viết và hiệu quả định vị lỗi không dùng LLM. RepoRepair (arXiv 2603.01048) cho thấy bỏ doc do LLM sinh làm số hàm định vị đúng trên SWE-bench Lite giảm từ 205/300 xuống 159/300, nhưng bài đó định vị bằng LLM.
