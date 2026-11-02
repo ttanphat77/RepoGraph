@@ -35,7 +35,8 @@ services:
       neo4j:
         condition: service_healthy
     volumes:
-      - ./cache:/app/cache:ro
+      # Ghi được: mỗi lần hỏi ghi bản ghi vào cache/<repo>/runs/
+      - ./cache:/app/cache
 
 volumes:
   neo4j_data:
