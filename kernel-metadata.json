@@ -1,0 +1,13 @@
+{
+  "id": "lionsibi/repograph",
+  "title": "repograph",
+  "code_file": "colab\\build_graph_flask_colab.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_internet": false,
+  "dataset_sources": [],
+  "competition_sources": [],
+  "enable_tpu": false
+}

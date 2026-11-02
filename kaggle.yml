@@ -1,0 +1,10 @@
+project: repograph
+kernel_slug: lionsibi/repograph
+code_file: colab\build_graph_flask_colab.ipynb
+accelerator: none
+internet: false
+privacy: private
+datasets: []
+competitions: []
+outputs:
+  download_to: .kaggle-outputs/
