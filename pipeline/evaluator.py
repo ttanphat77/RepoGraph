@@ -149,7 +149,7 @@ def run_rag_pipeline(
     output_tokens   = 0
 
     if run_llm and context:
-        llm_result      = generate(issue_text, context, candidate_files)
+        llm_result      = generate(issue_text, context)
         answer          = llm_result["answer"]
         predicted_files = llm_result["predicted_files"]
         input_tokens    = llm_result["input_tokens"]
@@ -175,3 +175,193 @@ def run_rag_pipeline(
         # Metrics
         **metrics,
     }
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# App đa nguồn, giai đoạn 1: một lần prompting trên K(p)
+#
+#   run_prompt(prompt)
+#       │  Engine (nạp một lần): RepoIndex, LocusIndex, MsgIndex, IssueIndex
+#       ▼
+#   retrieve_kp()  → K(p): [E] thực thể, [C] code, file, [D] doc, [H] commit, [I] báo cáo cũ
+#       ▼
+#   build_kp_messages() → stream_answer()  (một lần gọi LLM) ∥ count_section_tokens()
+#       ▼
+#   parse_citations() → bản ghi 8 khối → {INDEX_ROOT}/{repo}/runs/<run_id>/
+# ═════════════════════════════════════════════════════════════════════════════
+
+import json
+import subprocess
+import time
+import traceback
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+from pathlib import Path
+
+import config
+from pipeline.context import format_sections, retrieve_kp
+from pipeline.generator import (
+    KP_SYSTEM, KP_USER_TMPL, build_kp_messages, count_section_tokens, kp_token_parts, stream_answer,
+)
+from pipeline.ranking import _MD_CODEBLOCK_RE, embed_query_text, tokenize_code
+from pipeline.run_record import (
+    app_commit, config_block, latest_index_dir, new_run_id, parse_citations, retrieval_block, sha1_text,
+    write_run,
+)
+
+
+class Engine:
+    """Các chỉ mục truy hồi của một repo đã build, nạp một lần cho nhiều lần hỏi."""
+
+    def __init__(self, index_dir, ri, locus, msg, issue, units, reports, load_ms):
+        self.index_dir = Path(index_dir)
+        self.ri, self.locus, self.msg, self.issue = ri, locus, msg, issue
+        self.state = ri.state
+        self.units_by_sha = {u["h"]: u for u in units}
+        self.reports_by_n = {r["n"]: r for r in reports}
+        self.load_ms = load_ms
+
+    @classmethod
+    def load(cls, index_dir) -> "Engine":
+        from pipeline.history import LocusIndex, MsgIndex, _read_jsonl, graph_names
+        from pipeline.issues import IssueIndex, commit_texts, load_issue_data
+        from pipeline.ranking import RepoIndex
+        t0 = time.perf_counter()
+        index_dir = Path(index_dir)
+        ri = RepoIndex.load(index_dir)
+        prefix = ri.state.get("id_prefix", "local")
+        fc = {n["id"] for n in ri.nodes if n["label"] in ("Function", "Class")}
+        units = _read_jsonl(index_dir / "history" / "history.jsonl")
+        hunks = _read_jsonl(index_dir / "history" / "hunks.jsonl")
+        reports, links = load_issue_data(index_dir)
+        locus = LocusIndex(units, hunks, fc, graph_names(ri.nodes), prefix) if units else None
+        msg = MsgIndex(units, fc, prefix, commit_texts(units, reports, links)) if units else None
+        issue = IssueIndex(reports, units, links, fc, prefix) if reports else None
+        return cls(index_dir, ri, locus, msg, issue, units, reports,
+                   round((time.perf_counter() - t0) * 1000, 1))
+
+
+_ENGINES: dict[str, tuple[str, Engine]] = {}
+
+
+def get_engine(index_dir) -> Engine:
+    """Engine của index_dir, nạp lại khi index được build lại (built_at đổi)."""
+    key = str(Path(index_dir).resolve())
+    built = json.loads((Path(index_dir) / "index_state.json").read_text(encoding="utf-8")).get("built_at", "")
+    cached = _ENGINES.get(key)
+    if cached is None or cached[0] != built:
+        _ENGINES[key] = (built, Engine.load(index_dir))
+    return _ENGINES[key][1]
+
+
+def _index_block(engine: Engine) -> dict:
+    """Trạng thái index lúc hỏi, kèm cờ index cũ hơn HEAD hiện tại của repo."""
+    st = engine.state
+    repo_path = st.get("repo_path")
+    head_now = subprocess.run(["git", "-C", repo_path, "rev-parse", "HEAD"], capture_output=True,
+                              text=True).stdout.strip() if repo_path else ""
+    hist, iss = st.get("history") or {}, st.get("issues") or {}
+    return {
+        "repo_path": repo_path, "remote": st.get("remote"), "head_sha": st.get("head_sha"),
+        "head_time": st.get("head_time"), "built_at": st.get("built_at"),
+        "last_update": (st.get("last_update") or {}).get("head_after"), "id_prefix": st.get("id_prefix"),
+        "nodes": st.get("nodes"), "edges": st.get("edges"), "doc_cov": st.get("doc_cov"),
+        "history": {k: hist.get(k) for k in ("commits", "with_touch", "hunks", "commit_nodes")},
+        "issues": {"reports": iss.get("reports"), "prs": iss.get("prs"), "links": iss.get("links"),
+                   "fetch_complete": (iss.get("fetch") or {}).get("complete")},
+        "embedding": {k: (st.get("embedding") or {}).get(k) for k in ("model", "encoders", "dim")},
+        "repo_head_now": head_now or None,
+        "stale": bool(head_now and st.get("head_sha") and head_now != st["head_sha"]),
+        "engine_load_ms": engine.load_ms,
+    }
+
+
+def run_prompt(prompt: str, index_dir=None, engine: Engine | None = None, on_text=None,
+               llm=stream_answer, counter=count_section_tokens, t_query: float | None = None):
+    """
+    Một lần prompting: truy hồi K(p), gọi LLM một lần, ghi bản ghi. Lỗi ở bước nào cũng
+    vẫn ghi bản ghi đủ 8 khối, với lỗi ở khối warnings và llm.
+
+    Args:
+        index_dir: {INDEX_ROOT}/{repo}. None → index build gần nhất.
+        on_text:   callback nhận từng đoạn chữ của câu trả lời (stream).
+        llm, counter: hàm gọi LLM và hàm đếm token (thay được khi test).
+        t_query:   thời điểm hỏi (giây UNIX) cho Fix của Locus. None → lúc gọi.
+
+    Returns:
+        (record, thư mục của lần chạy)
+    """
+    t_start = time.perf_counter()
+    index_dir = Path(index_dir) if index_dir else (engine.index_dir if engine else latest_index_dir())
+    if index_dir is None:
+        raise FileNotFoundError("No built index found. Run scripts/build_graph.py first.")
+    t_query = t_query or time.time()
+    stripped = _MD_CODEBLOCK_RE.sub(" ", prompt)
+    timing: dict = {}
+    warnings: list[str] = []
+    rec = {
+        "run": {"run_id": new_run_id(), "started_at": datetime.now(timezone.utc).isoformat(),
+                "app": app_commit(), "mode": "prompt", "prompt": prompt, "prompt_chars": len(prompt),
+                "query_bm25_tokens": len(tokenize_code(prompt)),
+                "query_embed_chars": len(embed_query_text(prompt)),
+                "query_embed_cut": len(stripped) > config.EMBED_QUERY_CHARS,
+                "t_query": t_query},
+        "index": None, "config": config_block(sha1_text(KP_SYSTEM, KP_USER_TMPL)), "retrieval": None,
+        "llm": None, "citations": None, "timing": timing, "warnings": warnings,
+    }
+    system = user = ""
+    kp, meta = None, {"answer": "", "finish_reason": "NOT_RUN"}
+
+    try:
+        t0 = time.perf_counter()
+        engine = engine or get_engine(index_dir)
+        timing["engine_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+        rec["index"] = _index_block(engine)
+        warnings += engine.ri.warnings
+        if rec["index"]["stale"]:
+            warnings.append(f"index is older than the repository HEAD "
+                            f"({rec['index']['head_sha'][:8]} vs {rec['index']['repo_head_now'][:8]}); run update")
+        kp = retrieve_kp(engine, prompt, t_query, timing)
+        warnings += [f"section {s} is empty: {why}" for s, why in kp["metrics"]["empty_reason"].items() if why]
+        sections = format_sections(kp)
+        repo = engine.state.get("remote") or engine.state.get("repo_path") or str(index_dir)
+        commit = (engine.state.get("head_sha") or "unknown")[:8]
+        system, user = build_kp_messages(prompt, sections, repo, commit)
+    except Exception as e:
+        warnings.append(f"retrieval failed: {type(e).__name__}: {e}")
+        rec["run"]["traceback"] = traceback.format_exc()
+
+    if user:
+        counts, t0 = None, time.perf_counter()
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(counter, kp_token_parts(prompt, sections, repo, commit))
+            meta = llm(system, user, on_text)
+            try:
+                counts = fut.result()
+            except Exception as e:
+                warnings.append(f"token counting failed: {type(e).__name__}: {e}")
+        timing["llm_wall_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+        total = sum(counts.values()) if counts else None
+        ptc = meta.get("prompt_token_count")
+        rec["llm"] = {**{k: v for k, v in meta.items() if k != "answer"},
+                      "answer_chars": len(meta.get("answer") or ""), "section_tokens": counts,
+                      "section_tokens_sum": total,
+                      "section_tokens_gap": round((ptc - total) / ptc, 4) if ptc and total is not None else None}
+        if meta.get("error"):
+            warnings.append(f"LLM call failed: {meta['error']}")
+        elif meta.get("finish_reason") not in (None, "STOP"):
+            warnings.append(f"LLM finish_reason = {meta['finish_reason']}")
+    else:
+        rec["llm"] = {"finish_reason": "NOT_RUN", "error": "retrieval failed, LLM not called"}
+
+    answer = meta.get("answer") or ""
+    cit = parse_citations(answer, kp)
+    rec["citations"] = cit
+    if cit["invalid_items"] or cit["invalid_symbols"]:
+        warnings.append(f"invalid citations: {len(cit['invalid_items'])} item ids, "
+                        f"{len(cit['invalid_symbols'])} symbols")
+    if kp:
+        rec["retrieval"] = retrieval_block(kp, set(cit["cited_items"]))
+    timing["total_ms"] = round((time.perf_counter() - t_start) * 1000, 1)
+    run_dir = write_run(index_dir, rec, system, user, answer)
+    return rec, run_dir

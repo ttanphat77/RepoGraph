@@ -198,6 +198,160 @@ def generate(issue_text: str, context: str, lang: str = "Python") -> dict:
         }
 
 
+# ── K(p): trả lời một lần trên ngữ cảnh đa nguồn ──────────────────────────────
+# Phần "Issue Type" → "Confidence" của prompt triage được giữ nguyên. Phần mở đầu thay bằng
+# mô tả các phần của K(p). Loại thông tin thường gặp ở mỗi nguồn lấy từ judge của v4-L8:
+# DOC chủ yếu cho cách dùng API và hành vi mong đợi, HIST cho thay đổi trước đây, ISSUE cho
+# lỗi tương tự. Quy tắc trích mã item theo ALCE (Gao và cộng sự, EMNLP 2023).
+_KP_INTRO = """\
+You are a senior Python engineer answering a prompt about one software repository. The prompt can be \
+an issue report, a question about the code, or a request to find code or documentation.
+
+You are given the prompt and a context retrieved from the repository. Every item of the context has an id \
+in square brackets:
+- [E] Entities named in the prompt: code elements whose name or file path appears in the prompt.
+- [C] Code: functions and classes ranked by code search combined with the change history, most relevant \
+first. Each item lists its direct callers and callees (names only) and its source.
+- Files: files ranked by their best function or class.
+- [D] Documentation passages: usually describe the expected behavior and how an API is meant to be used.
+- [H] Past commits with their linked tickets or pull requests: usually show how the involved code changed \
+before and why.
+- [I] Past bug reports that were fixed: usually describe similar failures and their causes.
+Some items may be unrelated to the prompt. Ignore them. The context may not cover the whole repository.
+"""
+
+_KP_CITATION = """
+
+---
+
+### Citations
+- Cite code as `symbol` in `path/to/file:line`, with a line inside a [C] or [E] item.
+- Cite context items by their id in square brackets, for example [C2], [D1], [H3], [I1].
+- Cite only items that appear in the context. Do not invent ids, files, or line numbers.
+- Answer in the same language as the prompt.
+"""
+
+KP_SYSTEM = _KP_INTRO + "\n---\n" + _SYSTEM_TMPL.format(lang="Python").split("---", 1)[1].rstrip() + _KP_CITATION
+
+KP_USER_TMPL = """\
+## Prompt
+
+{prompt}
+
+## Retrieved context
+
+Repository `{repo}` at commit `{commit}`.
+
+### Entities named in the prompt [E]
+
+{entities}
+
+### Code [C]
+
+{code}
+
+### Files
+
+{files}
+
+### Documentation passages [D]
+
+{doc}
+
+### Past commits [H]
+
+{hist}
+
+### Past bug reports [I]
+
+{issue}
+"""
+
+KP_SECTIONS = ("entities", "code", "files", "doc", "hist", "issue")
+
+
+def build_kp_messages(prompt: str, sections: dict[str, str], repo: str, commit: str) -> tuple[str, str]:
+    """(system instruction, nội dung user) cho một lần trả lời trên K(p)."""
+    return KP_SYSTEM, KP_USER_TMPL.format(prompt=prompt.strip(), repo=repo, commit=commit, **sections)
+
+
+def kp_token_parts(prompt: str, sections: dict[str, str], repo: str, commit: str) -> dict[str, str]:
+    """
+    Các phần văn bản để đếm token riêng: system, prompt, từng phần K(p), và phần khung
+    (tiêu đề, dòng repo/commit) là mẫu user với mọi chỗ trống để rỗng.
+    """
+    glue = KP_USER_TMPL.format(prompt="", repo=repo, commit=commit, **{k: "" for k in KP_SECTIONS})
+    return {"system": KP_SYSTEM, "prompt": prompt.strip(), **sections, "template": glue}
+
+
+def count_section_tokens(parts: dict[str, str], client: genai.Client | None = None,
+                         model: str = _MODEL) -> dict[str, int]:
+    """
+    Số token của từng phần theo models.count_tokens của Gemini (đúng tokenizer của model,
+    không tính phí như một lần sinh). Gọi song song, mỗi phần một lần.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    client = client or _get_client()
+
+    def _one(item):
+        name, text = item
+        if not text:
+            return name, 0
+        return name, client.models.count_tokens(model=model, contents=text).total_tokens or 0
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        return dict(ex.map(_one, parts.items()))
+
+
+def stream_answer(system: str, user: str, on_text=None, client: genai.Client | None = None,
+                  model: str = _MODEL) -> dict:
+    """
+    Một lần gọi LLM, có stream. on_text(chunk) được gọi với từng đoạn chữ.
+
+    Returns:
+        {"answer", "model", "model_version", "response_id", "finish_reason", "prompt_token_count",
+         "cached_content_token_count", "candidates_token_count", "thoughts_token_count",
+         "total_token_count", "ttft_ms", "llm_ms", "error"}
+    """
+    import time
+    meta = {"answer": "", "model": model, "model_version": None, "response_id": None,
+            "finish_reason": None, "prompt_token_count": None, "cached_content_token_count": None,
+            "candidates_token_count": None, "thoughts_token_count": None, "total_token_count": None,
+            "ttft_ms": None, "llm_ms": None, "error": None}
+    t0 = time.perf_counter()
+    try:
+        client = client or _get_client()
+        stream = client.models.generate_content_stream(
+            model=model, contents=user,
+            config=genai.types.GenerateContentConfig(system_instruction=system))
+        for chunk in stream:
+            cand = chunk.candidates[0] if chunk.candidates else None
+            for part in (cand.content.parts if cand and cand.content else None) or []:
+                if part.text and not part.thought:
+                    if meta["ttft_ms"] is None:
+                        meta["ttft_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+                    meta["answer"] += part.text
+                    if on_text:
+                        on_text(part.text)
+            if cand and cand.finish_reason:
+                meta["finish_reason"] = getattr(cand.finish_reason, "name", str(cand.finish_reason))
+            meta["model_version"] = chunk.model_version or meta["model_version"]
+            meta["response_id"] = chunk.response_id or meta["response_id"]
+            u = chunk.usage_metadata
+            if u:
+                for k in ("prompt_token_count", "cached_content_token_count", "candidates_token_count",
+                          "thoughts_token_count", "total_token_count"):
+                    v = getattr(u, k, None)
+                    if v is not None:
+                        meta[k] = v
+    except Exception as e:
+        logger.error("LLM streaming error: %s", e)
+        meta["error"] = f"{type(e).__name__}: {e}"
+        meta["finish_reason"] = "ERROR"
+    meta["llm_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+    return meta
+
+
 def extract_files_from_answer(answer: str) -> list[str]:
     # Match FILE: lines — any extension
     found  = re.compile(r"FILE:\s*([\w/\-\.]+\.\w+)", re.IGNORECASE).findall(answer)
