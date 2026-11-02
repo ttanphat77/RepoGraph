@@ -64,6 +64,41 @@ _SOURCE_TRUNCATE = 3000  # ký tự tối đa mỗi node
 _MAX_NODES = 60
 
 
+def extract_identifiers(text: str) -> list[str]:
+    """
+    Trích identifier từ text dùng regex — không cần LLM.
+
+    Ưu tiên:
+      1. Quoted identifiers — developer cố ý đề cập (`foo`)
+      2. File paths — signal rõ ràng nhất (django/db/models.py)
+      3. PascalCase — khả năng cao là tên class
+      4. snake_case — khả năng cao là tên function
+
+    Lọc qua _STOPWORDS để loại false positives phổ biến.
+    """
+    found: set[str] = set()
+
+    # PascalCase → likely class names
+    found.update(m for m in _RE_PASCAL.findall(text) if m not in _STOPWORDS)
+
+    # snake_case → likely function/method names
+    found.update(_RE_SNAKE.findall(text))
+
+    # Quoted identifiers → highest signal (dev mentions explicitly)
+    for m in _RE_QUOTED.findall(text):
+        if len(m) > 2:
+            found.add(m)
+
+    # File paths → trích module name và giữ nguyên path
+    for fp in _RE_FILEPATH.findall(text):
+        base = fp.split("/")[-1].replace(".py", "")
+        if base and base not in _STOPWORDS:
+            found.add(base)
+        found.add(fp)  # giữ nguyên path để match node.file
+
+    return sorted(found)
+
+
 class GraphRetriever:
     """
     Retriever kết nối Neo4j để thực hiện graph-based retrieval.
@@ -159,38 +194,8 @@ class GraphRetriever:
     # ── Step 1: Entity Resolution ─────────────────────────────────────────────
 
     def _extract_identifiers(self, text: str) -> list[str]:
-        """
-        Trích identifier từ issue text dùng regex — không cần LLM.
-
-        Ưu tiên:
-          1. Quoted identifiers — developer cố ý đề cập (`foo`)
-          2. File paths — signal rõ ràng nhất (django/db/models.py)
-          3. PascalCase — khả năng cao là tên class
-          4. snake_case — khả năng cao là tên function
-
-        Lọc qua _STOPWORDS để loại false positives phổ biến.
-        """
-        found: set[str] = set()
-
-        # PascalCase → likely class names
-        found.update(m for m in _RE_PASCAL.findall(text) if m not in _STOPWORDS)
-
-        # snake_case → likely function/method names
-        found.update(_RE_SNAKE.findall(text))
-
-        # Quoted identifiers → highest signal (dev mentions explicitly)
-        for m in _RE_QUOTED.findall(text):
-            if len(m) > 2:
-                found.add(m)
-
-        # File paths → trích module name và giữ nguyên path
-        for fp in _RE_FILEPATH.findall(text):
-            base = fp.split("/")[-1].replace(".py", "")
-            if base and base not in _STOPWORDS:
-                found.add(base)
-            found.add(fp)  # giữ nguyên path để match node.file
-
-        return sorted(found)
+        """Trích identifier từ issue text. Xem extract_identifiers()."""
+        return extract_identifiers(text)
 
     # ── Step 1b: BM25 seed lookup ─────────────────────────────────────────────
 
