@@ -1,11 +1,13 @@
 """
 scripts/build_graph.py — CLI entrypoint để xây dựng Knowledge Graph
 
-Ba chế độ:
+Bốn chế độ:
   swe-lite <index>  — Lấy instance thứ <index> trong SWE-bench Lite,
                       clone repo tại đúng base_commit, parse và nạp vào Neo4j.
   local <path>      — Parse một thư mục local (không cần dataset).
   url <url>         — Clone từ git URL bất kỳ (GitHub/GitLab/...) và build graph.
+  update <path>     — Repo đã build: kéo commit mới (git pull --ff-only) rồi build lại.
+                      Cache embedding, history, hunk và issue chỉ xử lý phần mới.
 
 Pipeline gồm 4 stage:
   Stage 1 — Parallel AST Extraction:
@@ -16,6 +18,22 @@ Pipeline gồm 4 stage:
       ASTEngine.resolve_cross_file() nhận kết quả tất cả files,
       xây index toàn cục, resolve call/inherit refs thành cạnh cụ thể.
 
+  Stage 2b — Doc layer (chỉ repo Python):
+      Document/DocChunk + cạnh HasChunk, Documents, References (pipeline/doc_extractor.py).
+
+  Stage 2c — Embeddings:
+      Function/Class/DocChunk → {INDEX_ROOT}/{repo}/node_vectors.npy, cache theo nội dung.
+
+  Stage 2d — History layer (chỉ repo Python có git):
+      Commit nhánh chính trong HIST_YEARS năm trước HEAD, touch set và chỉ mục hunk
+      (pipeline/history.py) → {INDEX_ROOT}/{repo}/history/. Commit sửa ít nhất một
+      hàm/lớp của graph thành node Commit, kèm cạnh Modifies tới hàm/lớp đó.
+
+  Stage 2e — Issue layer (repo trên GitHub):
+      Tải issue/PR đã đóng (pipeline/issues.py), nối báo cáo với commit
+      → {INDEX_ROOT}/{repo}/issues/. Issue được commit trong graph sửa thành node
+      Issue, kèm cạnh Fixes (Commit → Issue).
+
   Stage 3 — Community Detection (optional):
       Leiden algorithm trên igraph. Gán community ID cho mỗi node.
       Tắt mặc định vì chậm trên repo lớn (ENABLE_COMMUNITY_DETECTION).
@@ -23,6 +41,9 @@ Pipeline gồm 4 stage:
   Stage 4 — Bulk Ingestion:
       MERGE nodes vào Neo4j → flush → MERGE edges (thứ tự bắt buộc).
       Clear graph trước mỗi lần build để tránh data cũ lẫn vào.
+
+  Cuối cùng ghi {INDEX_ROOT}/{repo}/index_state.json: HEAD, thời điểm build,
+  số node/cạnh theo loại, độ phủ doc, thống kê embedding và thời gian từng stage.
 """
 
 import argparse
@@ -30,14 +51,19 @@ import sys
 import os
 import json
 import logging
+import time
 import concurrent.futures
+from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Thêm project root vào sys.path để import pipeline từ bất kỳ thư mục nào
 sys.path.append(str(Path(__file__).parent.parent))
 
 from pipeline.dataset_loader import load_swe_bench_lite, save_cache, load_cache
-from pipeline.repo_manager import clone_and_checkout, get_python_files, clone_from_url, get_source_files
+from pipeline.repo_manager import (
+    clone_and_checkout, get_python_files, clone_from_url, get_source_files, index_dir_of,
+)
 from pipeline.ast_engine import ASTEngine
 from pipeline.schemas import load_schema
 from pipeline.neo4j_ingester import Neo4jIngester
@@ -101,6 +127,25 @@ def clear_graph(ingester: Neo4jIngester) -> None:
     logging.info("Graph cleared.")
 
 
+def _head_info(repo_path: str) -> dict:
+    """Commit HEAD và remote của repo. Thư mục không phải git repo → các giá trị None."""
+    try:
+        from git import Repo
+        repo = Repo(repo_path)
+        head = repo.head.commit
+        try:
+            remote = repo.remotes.origin.url
+        except Exception:
+            remote = None
+        return {
+            "remote": remote,
+            "head_sha": head.hexsha,
+            "head_time": datetime.fromtimestamp(head.committed_date, timezone.utc).isoformat(),
+        }
+    except Exception:
+        return {"remote": None, "head_sha": None, "head_time": None}
+
+
 def _parse_one_file(args: tuple) -> dict | None:
     """
     Hàm top-level để ProcessPoolExecutor có thể pickle.
@@ -137,8 +182,17 @@ def build_graph_from_repo(repo_path: str, base_commit: str = "local", lang: str 
         logging.error(f"Unsupported language: {lang!r}. Choose from: {list(LANG_CONFIG)}")
         return
 
+    # Import ở đây, không ở đầu file: trên Windows mỗi worker của ProcessPoolExecutor import lại
+    # file này, và các module dưới đây kéo theo scipy, scikit-learn, nltk, torch → hết RAM.
+    from pipeline.doc_extractor import extract_docs
+    from pipeline.embeddings import embed_nodes
+    from pipeline.history import build_history, build_hunks
+    from pipeline.issues import fetch_reports, github_slug, issue_links, load_issue_data, save_links
+
     schema = load_schema(config.ACTIVE_SCHEMA)
     logging.info(f"Active schema: {config.ACTIVE_SCHEMA!r}, lang: {lang!r}")
+    timing: dict[str, float] = {}
+    t_stage = time.perf_counter()
 
     extensions = LANG_CONFIG[lang]["extensions"]
     source_files = get_source_files(repo_path, extensions)
@@ -173,6 +227,97 @@ def build_graph_from_repo(repo_path: str, base_commit: str = "local", lang: str 
     # Phải chạy sau khi có kết quả của TẤT CẢ files (cần index toàn cục)
     logging.info("Stage 2: Resolving cross-file semantic edges...")
     semantic_edges = ASTEngine.resolve_cross_file(all_results, schema)
+    timing["parse_resolve"] = time.perf_counter() - t_stage
+
+    code_nodes = list({n["id"]: n for res in all_results for n in res["nodes"]}.values())
+
+    # ── Stage 2b: Doc layer (chỉ repo Python) ────────────────────────────────
+    # Cạnh Documents nối tên trong role/directive Sphinx với Function/Class Python.
+    t_stage = time.perf_counter()
+    docs = {"nodes": [], "edges": [], "stats": {}}
+    if lang == "python":
+        logging.info("Stage 2b: Extracting documentation layer...")
+        docs = extract_docs(repo_path, code_nodes)
+        s = docs["stats"]
+        logging.info(f"Docs: {s['doc_files']} files, {s['chunks']} chunks, "
+                     f"Documents {s['documents_edges']}/{s['pending_links']} resolved, "
+                     f"References {s['references_edges']}")
+    timing["docs"] = time.perf_counter() - t_stage
+
+    # ── Stage 2c: Embeddings ─────────────────────────────────────────────────
+    logging.info("Stage 2c: Embedding Function/Class/DocChunk nodes...")
+    t_stage = time.perf_counter()
+    idx_dir = index_dir_of(repo_path)
+    embed_stats = embed_nodes(code_nodes + docs["nodes"], idx_dir)
+    logging.info(f"Embeddings: {embed_stats['n']} nodes "
+                 f"({embed_stats['encoded']} encoded, {embed_stats['reused']} from cache)")
+    timing["embed"] = time.perf_counter() - t_stage
+
+    # ── Stage 2d: History layer (chỉ repo Python có git) ─────────────────────
+    t_stage = time.perf_counter()
+    hist = {"nodes": [], "edges": [], "stats": {}}
+    units = []
+    head = _head_info(repo_path)
+    if lang == "python" and head["head_sha"]:
+        logging.info("Stage 2d: Building history layer (commits, touch sets, hunks)...")
+        units, h_stats = build_history(repo_path, idx_dir)
+        _, k_stats = build_hunks(repo_path, idx_dir, units)
+        graph_fc = {n["id"] for n in code_nodes if n["labels"][0] in ("Function", "Class")}
+        for u in units:
+            targets = [f"{base_commit}:{k}" for k in u["touch"] if f"{base_commit}:{k}" in graph_fc]
+            if not targets:
+                continue
+            cid = f"commit:{u['h']}"
+            hist["nodes"].append({"labels": ["Commit"], "id": cid, "properties": {
+                "sha": u["h"], "parent": u["p"], "merge": u["merge"], "message": u["msg"],
+                "time": datetime.fromtimestamp(u["t"], timezone.utc).isoformat(),
+                "n_touch": len(u["touch"]),
+            }})
+            hist["edges"] += [{"type": "Modifies", "source": cid, "target": t} for t in targets]
+        hist["stats"] = {**h_stats, "hunks": k_stats["hunks"], "hunk_new_commits": k_stats["new_commits"],
+                         "hunk_seconds": k_stats["seconds"], "commit_nodes": len(hist["nodes"])}
+        logging.info(f"History: {h_stats['commits']} commits ({h_stats['new']} new), "
+                     f"{h_stats['with_touch']} touch a function/class, {k_stats['hunks']} hunks, "
+                     f"{len(hist['nodes'])} Commit nodes")
+    timing["history"] = time.perf_counter() - t_stage
+
+    # ── Stage 2e: Issue layer (repo trên GitHub) ─────────────────────────────
+    t_stage = time.perf_counter()
+    issues = {"nodes": [], "edges": [], "stats": {}}
+    slug = github_slug(head["remote"])
+    if units and slug:
+        logging.info(f"Stage 2e: Fetching closed issues/PRs of {slug} and linking them to commits...")
+        try:
+            fetch = fetch_reports(slug, idx_dir)
+        except Exception as e:                      # mạng lỗi: dùng báo cáo đã tải trước đó (nếu có)
+            logging.warning(f"Issue fetch failed: {e}")
+            fetch = {"complete": False, "error": str(e)}
+        reports, _ = load_issue_data(idx_dir)
+        links = issue_links(units, reports, slug)
+        save_links(idx_dir, links)
+        commit_ids = {n["id"] for n in hist["nodes"]}
+        rep = {r["n"]: r for r in reports if not r["pr"]}
+        seen = set()
+        for (n, h), _ty in sorted(links.items()):
+            if n not in rep or f"commit:{h}" not in commit_ids:
+                continue
+            iid = f"issue:{n}"
+            if iid not in seen:
+                seen.add(iid)
+                r = rep[n]
+                issues["nodes"].append({"labels": ["Issue"], "id": iid, "properties": {
+                    "number": n, "title": r["title"], "body": r["body"], "url": r.get("url", ""),
+                    "created": datetime.fromtimestamp(r["created"], timezone.utc).isoformat(),
+                }})
+            issues["edges"].append({"type": "Fixes", "source": f"commit:{h}", "target": iid})
+        issues["stats"] = {"slug": slug, "fetch": fetch, "reports": len(reports),
+                           "prs": sum(r["pr"] for r in reports), "links": len(links),
+                           "issue_nodes": len(issues["nodes"]), "fixes_edges": len(issues["edges"])}
+        logging.info(f"Issues: {len(reports)} reports ({issues['stats']['prs']} PRs), "
+                     f"fetch complete={fetch.get('complete')}, {len(links)} links, "
+                     f"{len(issues['nodes'])} Issue nodes")
+    timing["issues"] = time.perf_counter() - t_stage
+    t_stage = time.perf_counter()
 
     # ── Stage 3: Community Detection (Leiden) ────────────────────────────────
     if config.ENABLE_COMMUNITY_DETECTION:
@@ -223,9 +368,12 @@ def build_graph_from_repo(repo_path: str, base_commit: str = "local", lang: str 
             logging.warning("leidenalg/igraph not installed — skipping community detection.")
     else:
         logging.info("Stage 3: Community Detection skipped (ENABLE_COMMUNITY_DETECTION=False).")
+    timing["community"] = time.perf_counter() - t_stage
 
     # ── Stage 4: Bulk Ingestion vào Neo4j ────────────────────────────────────
     logging.info("Stage 4: Bulk Loading to Neo4j...")
+    t_stage = time.perf_counter()
+    ingested = False
     try:
         ingester = Neo4jIngester()
         clear_graph(ingester)  # xóa graph cũ trước
@@ -234,6 +382,8 @@ def build_graph_from_repo(repo_path: str, base_commit: str = "local", lang: str 
         for res in all_results:
             for node in res["nodes"]:
                 ingester.add_node(node)
+        for node in docs["nodes"] + hist["nodes"] + issues["nodes"]:
+            ingester.add_node(node)
 
         # FLUSH NODES TRƯỚC — bắt buộc vì edge query dùng MATCH endpoint
         # Nếu không flush, MATCH sẽ fail khi node chưa commit vào DB
@@ -248,13 +398,55 @@ def build_graph_from_repo(repo_path: str, base_commit: str = "local", lang: str 
         for edge in semantic_edges:
             ingester.add_edge(edge)
 
+        # Doc edges (HasChunk, Documents, References), history (Modifies) và issue (Fixes)
+        for edge in docs["edges"] + hist["edges"] + issues["edges"]:
+            ingester.add_edge(edge)
+
         ingester.flush()
         ingester.ensure_fulltext_index()
         ingester.close()
+        ingested = True
         logging.info("Graph construction complete.")
 
     except Exception as e:
         logging.error(f"Failed to ingest to Neo4j: {e}")
+    timing["ingest"] = time.perf_counter() - t_stage
+
+    # ── Trạng thái index ─────────────────────────────────────────────────────
+    all_nodes = code_nodes + docs["nodes"] + hist["nodes"] + issues["nodes"]
+    all_edges = ([e for res in all_results for e in res["definite_edges"]]
+                 + semantic_edges + docs["edges"] + hist["edges"] + issues["edges"])
+    # Đếm cạnh như Neo4j lưu: MERGE bỏ cạnh trùng (type, source, target), MATCH bỏ cạnh
+    # có đầu mút không phải node (vd import tới module ngoài repo).
+    node_ids = {n["id"] for n in all_nodes}
+    uniq_edges = {(e["type"], e["source"], e["target"]) for e in all_edges
+                  if e["source"] in node_ids and e["target"] in node_ids}
+    n_code = sum(1 for n in code_nodes if n["labels"][0] in ("Function", "Class"))
+    documented = {e["target"] for e in docs["edges"] if e["type"] == "Documents"}
+    state = {
+        "repo_path": str(Path(repo_path).resolve()),
+        **head,
+        "id_prefix": base_commit,
+        "lang": lang,
+        "schema": config.ACTIVE_SCHEMA,
+        "built_at": datetime.now(timezone.utc).isoformat(),
+        "neo4j_ingested": ingested,
+        "files": {"source": len(source_files), "parsed": len(all_results),
+                  "failed": len(files_to_parse) - len(all_results)},
+        "nodes": dict(Counter(n["labels"][0] for n in all_nodes)),
+        "edges": dict(Counter(t for t, _, _ in uniq_edges)),
+        "edges_raw": len(all_edges),   # trước khi bỏ trùng và bỏ cạnh treo
+        "docs": docs["stats"],
+        "history": hist["stats"],
+        "issues": issues["stats"],
+        "doc_cov": round(len(documented) / n_code, 6) if n_code else 0.0,
+        "embedding": embed_stats,
+        "timing_s": {k: round(v, 1) for k, v in timing.items()},
+    }
+    idx_dir.mkdir(parents=True, exist_ok=True)
+    (idx_dir / "index_state.json").write_text(json.dumps(state, indent=2, ensure_ascii=False),
+                                             encoding="utf-8")
+    logging.info(f"Index state → {idx_dir / 'index_state.json'}")
 
 
 def handle_swe_lite(index: int) -> None:
@@ -329,6 +521,57 @@ def handle_url(url: str, branch: str | None = None, token: str | None = None, la
     build_graph_from_repo(repo_path, base_commit="local", lang=lang)
 
 
+def handle_update(path: str) -> None:
+    """
+    Đưa repo đã build lên trạng thái mới nhất của nhánh hiện tại rồi build lại.
+
+    Build lại dùng cache: embedding theo nội dung, history và hunk theo sha commit,
+    issue theo tham số since. Kết quả của lần cập nhật được ghi thêm vào
+    index_state.json ở khối last_update.
+    """
+    import subprocess
+    idx_dir = index_dir_of(path)
+    state_path = idx_dir / "index_state.json"
+    if not state_path.exists():
+        logging.error(f"{path} has not been built yet (no {state_path}). Run 'local' or 'url' first.")
+        return
+    old = json.loads(state_path.read_text(encoding="utf-8"))
+
+    def _git(*args) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", path, *args], capture_output=True, text=True)
+
+    before = _git("rev-parse", "HEAD").stdout.strip()
+    if _git("remote").stdout.strip():
+        pull = _git("pull", "--ff-only")
+        if pull.returncode != 0:
+            logging.error(f"git pull --ff-only failed, index not updated:\n{pull.stderr.strip()}")
+            return
+    else:
+        logging.info("No git remote: building the working tree as it is.")
+    after = _git("rev-parse", "HEAD").stdout.strip()
+    n_new = _git("rev-list", "--count", "--first-parent", f"{before}..{after}").stdout.strip() \
+        if before and after and before != after else "0"
+    logging.info(f"HEAD {before[:8]} → {after[:8]} ({n_new} new first-parent commits)")
+
+    write_current_state({"instance_id": old.get("remote") or path, "gt_files": []})
+    build_graph_from_repo(path, base_commit=old.get("id_prefix", "local"), lang=old.get("lang", "python"))
+
+    new = json.loads(state_path.read_text(encoding="utf-8"))
+    emb = new.get("embedding", {})
+    hist = new.get("history", {})
+    fetch = new.get("issues", {}).get("fetch", {})
+    new["last_update"] = {
+        "head_before": before, "head_after": after, "new_first_parent_commits": int(n_new),
+        "history_new_commits": hist.get("new"), "hunk_new_commits": hist.get("hunk_new_commits"),
+        "embed_encoded": emb.get("encoded"), "embed_reused": emb.get("reused"),
+        "embed_reuse_rate": round(emb["reused"] / emb["n"], 4) if emb.get("n") else None,
+        "issue_new_rows": fetch.get("new_rows"), "issue_pages": fetch.get("pages"),
+        "issue_fetch_complete": fetch.get("complete"),
+    }
+    state_path.write_text(json.dumps(new, indent=2, ensure_ascii=False), encoding="utf-8")
+    logging.info(f"Update summary: {new['last_update']}")
+
+
 def main() -> None:
     """Entry point CLI — parse args và dispatch đến handler phù hợp."""
     parser = argparse.ArgumentParser(description="GraphRAG POC Graph Builder")
@@ -350,8 +593,14 @@ def main() -> None:
     p_url.add_argument("--token", default=None, help="Access token for private repos (HTTPS only)")
     p_url.add_argument("-l", "--lang", default="python", choices=list(LANG_CONFIG), help="Programming language")
 
+    # Subcommand: update
+    p_upd = subparsers.add_parser("update", help="Pull new commits of a built repo and rebuild incrementally")
+    p_upd.add_argument("path", type=str, help="Path to the repo directory that was built before")
+
     args = parser.parse_args()
-    if args.command == "swe-lite":
+    if args.command == "update":
+        handle_update(args.path)
+    elif args.command == "swe-lite":
         handle_swe_lite(args.index)
     elif args.command == "local":
         handle_local(args.path, lang=args.lang)
