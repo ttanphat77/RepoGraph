@@ -1,13 +1,13 @@
 # =============================================================================
-# pipeline/context.py — Ghép K(p): tập ngữ cảnh đa nguồn cho một prompt
+# pipeline/context.py - Ghép K(p): tập ngữ cảnh đa nguồn cho một prompt
 #
 # K(p) gồm các phần theo thứ tự (mỗi item có mã để trích dẫn):
-#   [E] Thực thể được nhắc trong prompt  — node trùng tên/đường dẫn (RepoIndex.find_entities)
-#   [C] Code   — CODE_N hàm/lớp đầu của RRF(AST, HIST), kèm caller/callee một bước
-#   Files      — FILE_N file đầu, điểm file = điểm cao nhất của hàm/lớp trong file (SweRank)
-#   [D] DOC    — pool chunk (RepoIndex.doc_pool), DOC_QUOTA phần tử đầu đưa cho LLM
-#   [H] HIST   — pool commit theo phần lời (MsgIndex), HIST_QUOTA phần tử đầu
-#   [I] ISSUE  — pool báo cáo cũ (IssueIndex), ISSUE_QUOTA phần tử đầu
+#   [E] Thực thể được nhắc trong prompt  - node trùng tên/đường dẫn (RepoIndex.find_entities)
+#   [C] Code   - CODE_N hàm/lớp đầu của RRF(AST, HIST), kèm caller/callee một bước
+#   Files      - FILE_N file đầu, điểm file = điểm cao nhất của hàm/lớp trong file (SweRank)
+#   [D] DOC    - pool chunk (RepoIndex.doc_pool), DOC_QUOTA phần tử đầu đưa cho LLM
+#   [H] HIST   - pool commit theo phần lời (MsgIndex), HIST_QUOTA phần tử đầu
+#   [I] ISSUE  - pool báo cáo cũ (IssueIndex), ISSUE_QUOTA phần tử đầu
 #
 # DOC, HIST, ISSUE không trộn vào phần Code: ở v4-L8, +DOC và +ISSUE kém AST khi trộn
 # ngang hàng, còn bằng chứng của chúng hữu ích chủ yếu vì thông tin không phải vị trí code.

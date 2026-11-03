@@ -1,4 +1,4 @@
-# tui/kp_render.py — Bảng item RAG của K(p) và dòng số liệu, dùng chung cho TUI và scripts/ask.py
+# tui/kp_render.py - Bảng item RAG của K(p) và dòng số liệu, dùng chung cho TUI và scripts/ask.py
 #
 # Đầu vào là khối "retrieval" của bản ghi lần chạy (pipeline.run_record.retrieval_block),
 # nên cùng một hàm hiển thị được kết quả của run_prompt và của retrieve_kp.

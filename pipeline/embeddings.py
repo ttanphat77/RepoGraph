@@ -1,5 +1,5 @@
 # =============================================================================
-# pipeline/embeddings.py — Embedding cho Function, Class và DocChunk
+# pipeline/embeddings.py - Embedding cho Function, Class và DocChunk
 #
 # Thiết kế: mục 2.1 pipeline_design.md.
 #   - Model: config.EMBED_MODEL_ID (bge-small-en-v1.5), vector chuẩn hóa.
@@ -64,17 +64,11 @@ def _key(text: str) -> str:
 
 
 def _save_npy(path: Path, arr: np.ndarray) -> None:
-    """Ghi qua file tạm rồi thay file cũ, để lần ghi bị dừng giữa chừng không để lại file cụt."""
-    tmp = path.with_name(path.name + ".tmp")
-    with open(tmp, "wb") as f:
-        np.save(f, arr)
-    tmp.replace(path)
+    np.save(path, arr)
 
 
 def _save_json(path: Path, obj) -> None:
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(path)
+    path.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
 
 
 class EmbeddingCache:
@@ -111,6 +105,11 @@ class EmbeddingCache:
                                normalize_embeddings=True, convert_to_numpy=True,
                                show_progress_bar=len(miss) > 200).astype(np.float32)
             base = len(self.keys)
+            if base and self.vecs.shape[1] != new.shape[1]:
+                # Cache cũ của một model có số chiều khác: không dòng nào dùng lại được → bỏ
+                logger.warning("Embedding cache has another vector size, rebuilding it.")
+                self.keys, self.row, self.encoders = [], {}, {f"{device}/{dtype}"}
+                base = 0
             self.vecs = new if base == 0 else np.vstack([self.vecs, new])
             self.keys += miss
             self.row.update({k: base + j for j, k in enumerate(miss)})

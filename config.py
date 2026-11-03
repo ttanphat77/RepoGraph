@@ -69,7 +69,8 @@ COMMUNITY_EDGE_WEIGHTS: dict[str, float] = {
 # ── Index đa nguồn ───────────────────────────────────────────────────────────
 # Dữ liệu chấm điểm (embedding, history, issue) của mỗi repo nằm ở
 # {INDEX_ROOT}/{tên thư mục repo}/. Graph (node, cạnh) nằm trong Neo4j.
-INDEX_ROOT = "cache"
+# Đường dẫn tuyệt đối theo thư mục của file này, để lệnh chạy từ thư mục nào cũng tìm thấy index.
+INDEX_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
 
 # ── Embedding (mục 2.1 pipeline_design.md) ────────────────────────────────────
 # Function/Class: EMBED_CODE_CHARS ký tự đầu của source. DocChunk: heading + nội dung.

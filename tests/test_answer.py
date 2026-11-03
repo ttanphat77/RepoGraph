@@ -115,10 +115,15 @@ def _fake_counter(parts):
 
 
 class RunRecordTest(unittest.TestCase):
-    def _run(self, llm, engine=None):
-        d = tempfile.mkdtemp()
+    def _tmp(self):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        return d.name
+
+    def _run(self, llm, engine=None, **kw):
+        d = self._tmp()
         rec, run_dir = run_prompt("Why does `alpha` call beta?", index_dir=d, engine=engine or _engine(d),
-                                  llm=llm, counter=_fake_counter, t_query=1.0)
+                                  llm=llm, counter=_fake_counter, t_query=1.0, **kw)
         return d, rec, run_dir
 
     def test_success_record(self):
@@ -126,10 +131,9 @@ class RunRecordTest(unittest.TestCase):
 
         def llm(system, user, on_text):
             seen["user"] = user
-            total = sum(_fake_counter({"x": system}).values())  # chỉ để có số khác 0
             return {"answer": "It calls `beta` in `m.py:5` [C2].", "finish_reason": "STOP",
                     "prompt_token_count": 1000, "candidates_token_count": 20, "thoughts_token_count": 5,
-                    "total_token_count": 1025 + total * 0, "error": None}
+                    "total_token_count": 1025, "error": None}
         d, rec, run_dir = self._run(llm)
         self.assertEqual(list(rec), BLOCKS)
         self.assertEqual(rec["llm"]["section_tokens_gap"],
@@ -153,11 +157,19 @@ class RunRecordTest(unittest.TestCase):
         self.assertIsNotNone(rec["retrieval"])
         self.assertTrue((run_dir / "record.json").exists())
 
+    def test_config_records_model_used(self):
+        def llm(system, user, on_text):
+            return {"answer": "", "finish_reason": "STOP", "prompt_token_count": 10, "error": None}
+        _, rec_a, _ = self._run(llm, model="model-a")
+        _, rec_b, _ = self._run(llm, model="model-b")
+        self.assertEqual((rec_a["config"]["llm_model"], rec_b["config"]["llm_model"]), ("model-a", "model-b"))
+        self.assertNotEqual(rec_a["config"]["config_sha"], rec_b["config"]["config_sha"])
+
     def test_retrieval_error_still_records(self):
         ri = _toy_index()
         ri.ast_rank = lambda q, depth=500: (_ for _ in ()).throw(RuntimeError("boom"))
         called = []
-        d = tempfile.mkdtemp()
+        d = self._tmp()
         rec, run_dir = run_prompt("x", index_dir=d, engine=_engine(d, ri), llm=lambda *a: called.append(1),
                                   counter=_fake_counter, t_query=1.0)
         self.assertEqual(list(rec), BLOCKS)

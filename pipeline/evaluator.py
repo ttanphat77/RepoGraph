@@ -192,6 +192,7 @@ def run_rag_pipeline(
 
 import json
 import subprocess
+import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -234,24 +235,27 @@ class Engine:
         units = _read_jsonl(index_dir / "history" / "history.jsonl")
         hunks = _read_jsonl(index_dir / "history" / "hunks.jsonl")
         reports, links = load_issue_data(index_dir)
-        locus = LocusIndex(units, hunks, fc, graph_names(ri.nodes), prefix) if units else None
-        msg = MsgIndex(units, fc, prefix, commit_texts(units, reports, links)) if units else None
+        cache = index_dir / "history"   # ma trận đếm từ lưu ở đây, lần nạp sau chỉ đọc file
+        locus = LocusIndex(units, hunks, fc, graph_names(ri.nodes), prefix, cache) if units else None
+        msg = MsgIndex(units, fc, prefix, commit_texts(units, reports, links), cache) if units else None
         issue = IssueIndex(reports, units, links, fc, prefix) if reports else None
         return cls(index_dir, ri, locus, msg, issue, units, reports,
                    round((time.perf_counter() - t0) * 1000, 1))
 
 
 _ENGINES: dict[str, tuple[str, Engine]] = {}
+_ENGINES_LOCK = threading.Lock()   # bot và Streamlit gọi từ nhiều luồng: chỉ một luồng nạp engine
 
 
 def get_engine(index_dir) -> Engine:
     """Engine của index_dir, nạp lại khi index được build lại (built_at đổi)."""
     key = str(Path(index_dir).resolve())
     built = json.loads((Path(index_dir) / "index_state.json").read_text(encoding="utf-8")).get("built_at", "")
-    cached = _ENGINES.get(key)
-    if cached is None or cached[0] != built:
-        _ENGINES[key] = (built, Engine.load(index_dir))
-    return _ENGINES[key][1]
+    with _ENGINES_LOCK:
+        cached = _ENGINES.get(key)
+        if cached is None or cached[0] != built:
+            _ENGINES[key] = (built, Engine.load(index_dir))
+        return _ENGINES[key][1]
 
 
 def _index_block(engine: Engine) -> dict:
@@ -277,7 +281,7 @@ def _index_block(engine: Engine) -> dict:
 
 
 def run_prompt(prompt: str, index_dir=None, engine: Engine | None = None, on_text=None,
-               llm=stream_answer, counter=count_section_tokens, t_query: float | None = None):
+               llm=None, counter=None, t_query: float | None = None, model: str | None = None):
     """
     Một lần prompting: truy hồi K(p), gọi LLM một lần, ghi bản ghi. Lỗi ở bước nào cũng
     vẫn ghi bản ghi đủ 8 khối, với lỗi ở khối warnings và llm.
@@ -285,13 +289,18 @@ def run_prompt(prompt: str, index_dir=None, engine: Engine | None = None, on_tex
     Args:
         index_dir: {INDEX_ROOT}/{repo}. None → index build gần nhất.
         on_text:   callback nhận từng đoạn chữ của câu trả lời (stream).
-        llm, counter: hàm gọi LLM và hàm đếm token (thay được khi test).
+        llm, counter: hàm gọi LLM và hàm đếm token. None → stream_answer và count_section_tokens
+                   với `model` (thay được khi test).
         t_query:   thời điểm hỏi (giây UNIX) cho Fix của Locus. None → lúc gọi.
+        model:     model Gemini dùng cho lần chạy, ghi vào khối config. None → config.GEMINI_MODEL.
 
     Returns:
         (record, thư mục của lần chạy)
     """
     t_start = time.perf_counter()
+    model = model or config.GEMINI_MODEL
+    llm = llm or (lambda system, user, cb: stream_answer(system, user, cb, model=model))
+    counter = counter or (lambda parts: count_section_tokens(parts, model=model))
     index_dir = Path(index_dir) if index_dir else (engine.index_dir if engine else latest_index_dir())
     if index_dir is None:
         raise FileNotFoundError("No built index found. Run scripts/build_graph.py first.")
@@ -306,7 +315,7 @@ def run_prompt(prompt: str, index_dir=None, engine: Engine | None = None, on_tex
                 "query_embed_chars": len(embed_query_text(prompt)),
                 "query_embed_cut": len(stripped) > config.EMBED_QUERY_CHARS,
                 "t_query": t_query},
-        "index": None, "config": config_block(sha1_text(KP_SYSTEM, KP_USER_TMPL)), "retrieval": None,
+        "index": None, "config": config_block(sha1_text(KP_SYSTEM, KP_USER_TMPL), model), "retrieval": None,
         "llm": None, "citations": None, "timing": timing, "warnings": warnings,
     }
     system = user = ""

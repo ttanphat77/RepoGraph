@@ -63,16 +63,19 @@ _SOURCE_TRUNCATE = 3000  # ký tự tối đa mỗi node
 # Cap tổng số node trong subgraph để tránh query quá chậm trên repo lớn
 _MAX_NODES = 60
 
+# Loại cạnh code của hai schema (simple, detailed) mà BFS được đi qua
+_CODE_RELS = "Defines|Calls|Imports|Inherits|CONTAINS|INHERITS|HAS_METHOD|HAS_FIELD|USES"
+
 
 def extract_identifiers(text: str) -> list[str]:
     """
-    Trích identifier từ text dùng regex — không cần LLM.
+    Trích identifier từ text dùng regex - không cần LLM.
 
     Ưu tiên:
-      1. Quoted identifiers — developer cố ý đề cập (`foo`)
-      2. File paths — signal rõ ràng nhất (django/db/models.py)
-      3. PascalCase — khả năng cao là tên class
-      4. snake_case — khả năng cao là tên function
+      1. Quoted identifiers - developer cố ý đề cập (`foo`)
+      2. File paths - signal rõ ràng nhất (django/db/models.py)
+      3. PascalCase - khả năng cao là tên class
+      4. snake_case - khả năng cao là tên function
 
     Lọc qua _STOPWORDS để loại false positives phổ biến.
     """
@@ -314,10 +317,11 @@ class GraphRetriever:
         """
         seed_ids = [n["neo_id"] for n in seed_nodes]
 
-        # Query 1: BFS nodes — [*0..depth] là Cypher syntax cho variable-length path
+        # Query 1: BFS nodes. [*0..depth] là Cypher syntax cho variable-length path.
+        # Chỉ đi trên cạnh code, vì graph đa nguồn còn có node doc, commit, issue.
         node_query = f"""
         UNWIND $seed_ids AS sid
-        MATCH path = (seed)-[*0..{depth}]-(neighbor)
+        MATCH path = (seed)-[:{_CODE_RELS}*0..{depth}]-(neighbor)
         WHERE id(seed) = sid
         UNWIND nodes(path) AS n
         RETURN DISTINCT

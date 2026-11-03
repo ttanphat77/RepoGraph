@@ -1,5 +1,5 @@
 # =============================================================================
-# pipeline/run_record.py — Bản ghi một lần chạy (theo dõi và nghiên cứu)
+# pipeline/run_record.py - Bản ghi một lần chạy (theo dõi và nghiên cứu)
 #
 # Mỗi lần hỏi có một run_id và một thư mục {INDEX_ROOT}/{repo}/runs/<run_id>/:
 #   record.json  bản ghi đầy đủ, 8 khối: run, index, config, retrieval, llm,
@@ -48,8 +48,9 @@ def sha1_text(*texts: str) -> str:
     return hashlib.sha1("\n\x00\n".join(texts).encode("utf-8")).hexdigest()
 
 
-def config_block(prompt_template_sha: str) -> dict:
-    """Tham số của lần chạy. Hai lần chạy cùng config_sha thì so sánh được với nhau."""
+def config_block(prompt_template_sha: str, llm_model: str = config.GEMINI_MODEL) -> dict:
+    """Tham số của lần chạy, với llm_model là model thật đã gọi. Hai lần chạy cùng
+    config_sha thì so sánh được với nhau."""
     block = {
         "rrf_k": config.RRF_K, "list_depth": config.AST_DEPTH,
         "code_n": config.CODE_N, "file_n": config.FILE_N, "entity_limit": config.ENTITY_LIMIT,
@@ -59,7 +60,7 @@ def config_block(prompt_template_sha: str) -> dict:
         "locus_lambda": config.LOCUS_LAMBDA, "locus_beta1": config.LOCUS_BETA1,
         "hist_years": config.HIST_YEARS, "hist_max_touch": config.HIST_MAX_TOUCH,
         "issue_link_types": ["fixed"], "embed_model": config.EMBED_MODEL_ID,
-        "llm_model": config.GEMINI_MODEL, "llm_thinking": "model default",
+        "llm_model": llm_model, "llm_thinking": "model default",
         "prompt_template_sha": prompt_template_sha,
     }
     block["config_sha"] = sha1_text(json.dumps(block, sort_keys=True))[:12]

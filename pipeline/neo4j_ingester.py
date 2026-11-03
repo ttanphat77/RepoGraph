@@ -157,6 +157,7 @@ class Neo4jIngester:
             logger.info(f"Ingested {len(batch)} {label} nodes.")
         except Exception as e:
             logger.error(f"Failed to ingest nodes ({label}): {e}")
+            raise   # để build_graph ghi neo4j_ingested = false
         finally:
             # Xóa batch dù thành công hay thất bại để tránh retry vô hạn
             self.node_batch[label] = []
@@ -186,5 +187,6 @@ class Neo4jIngester:
             logger.info(f"Ingested {len(batch)} {edge_type} edges.")
         except Exception as e:
             logger.error(f"Failed to ingest edges ({edge_type}): {e}")
+            raise   # để build_graph ghi neo4j_ingested = false
         finally:
             self.edge_batch[edge_type] = []

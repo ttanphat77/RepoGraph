@@ -1,5 +1,5 @@
 # =============================================================================
-# pipeline/oracle.py — Oracle: một diff sửa những hàm/lớp nào
+# pipeline/oracle.py - Oracle: một diff sửa những hàm/lớp nào
 #
 # Thiết kế: mục 3 pipeline_design.md (oracle đã sửa ở việc 1.1 của nghiên cứu).
 # Lớp history dùng oracle để tính touch set của mỗi commit (cạnh Modifies) và gán

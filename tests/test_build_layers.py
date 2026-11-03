@@ -19,6 +19,7 @@ from pipeline.doc_extractor import (
     MAX_CHUNK_CHARS, DocExtractor, build_name_index, get_doc_files,
     resolve_doc_links, split_chunks,
 )
+from pipeline.neo4j_ingester import Neo4jIngester
 from pipeline.repo_manager import filter_source_files
 
 
@@ -143,6 +144,51 @@ class DocLinkTest(unittest.TestCase):
                 Path(d, p).write_text("x", encoding="utf-8")
             self.assertEqual(get_doc_files(d), ["docs/index.rst", "docs/guide.md", "docs/api/ref.txt"])
 
+    def test_get_doc_files_repo_under_skipped_name(self):
+        # Repo nằm trong thư mục tên "generated": tên đó ở ngoài repo nên không làm mất doc
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d, "generated", "myrepo")
+            Path(repo, "docs").mkdir(parents=True)
+            Path(repo, "docs", "index.rst").write_text("x", encoding="utf-8")
+            self.assertEqual(get_doc_files(str(repo)), ["docs/index.rst"])
+
+    def test_index_root_is_absolute(self):
+        self.assertTrue(os.path.isabs(embeddings.config.INDEX_ROOT))
+
+
+class _FailingDriver:
+    """Driver giả: mọi câu lệnh ghi đều lỗi."""
+
+    def session(self):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def run(self, *args, **kwargs):
+        raise RuntimeError("write failed")
+
+    def close(self):
+        pass
+
+
+class IngesterTest(unittest.TestCase):
+    def test_flush_error_is_raised(self):
+        # Lỗi ghi batch phải báo ra ngoài để build_graph ghi neo4j_ingested = false
+        ing = Neo4jIngester()
+        ing.driver.close()
+        ing.driver = _FailingDriver()
+        ing.add_node({"labels": ["Function"], "id": "f", "properties": {"name": "f"}})
+        with self.assertRaisesRegex(RuntimeError, "write failed"):
+            ing.flush()
+        self.assertEqual(ing.node_batch["Function"], [])                  # batch vẫn được xóa
+        ing.add_edge({"type": "Calls", "source": "f", "target": "g"})
+        with self.assertRaisesRegex(RuntimeError, "write failed"):
+            ing.flush()
+
 
 class _FakeModel:
     """Model giả: vector 3 chiều tính từ độ dài văn bản, đếm số văn bản đã encode."""
@@ -192,7 +238,24 @@ class EmbeddingTest(unittest.TestCase):
             self.assertEqual(vecs.shape, (2, 3))
             self.assertAlmostEqual(float(np.linalg.norm(vecs[0])), 1.0, places=5)
             self.assertEqual(s2["encoders"], ["cpu/float32"])
-            self.assertFalse(any(p.endswith(".tmp") for p in os.listdir(d)))
+
+    def test_cache_rebuilt_when_vector_size_changes(self):
+        nodes = [{"labels": ["Function"], "id": "a", "properties": {"name": "a", "source": "def a(): pass"}}]
+
+        class Wide(_FakeModel):
+            def encode(self, texts, **_):
+                return np.ones((len(texts), 4), dtype=np.float32) / 2.0
+        orig_model = embeddings.config.EMBED_MODEL_ID
+        with tempfile.TemporaryDirectory() as d:
+            embeddings.embed_nodes(nodes, d)                                     # cache 3 chiều
+            embeddings._MODEL = (Wide(), "cpu", "float32")
+            embeddings.config.EMBED_MODEL_ID = "other-model"                     # model khác, 4 chiều
+            try:
+                s = embeddings.embed_nodes(nodes, d)
+            finally:
+                embeddings.config.EMBED_MODEL_ID = orig_model
+            self.assertEqual((s["dim"], s["encoded"]), (4, 1))
+            self.assertEqual(np.load(Path(d, "embed_cache.npy")).shape, (1, 4))
 
 
 if __name__ == "__main__":

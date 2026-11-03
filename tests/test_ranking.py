@@ -13,7 +13,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pipeline.ranking import RepoIndex, embed_query_text, file_rank, rrf_fuse, tokenize_code
+from pipeline.ranking import (
+    RepoIndex, check_graph_matches, embed_query_text, file_rank, rrf_fuse, tokenize_code,
+)
 
 
 def _n(nid, label, name, file, source=""):
@@ -48,6 +50,18 @@ class RrfFuseTest(unittest.TestCase):
 
     def test_limit(self):
         self.assertEqual(len(rrf_fuse(["a", "b", "c"], {}, limit=2)), 2)
+
+
+class GraphMatchTest(unittest.TestCase):
+    def test_check_graph_matches(self):
+        state = {"neo4j_ingested": True, "nodes": {"Function": 3, "Module": 1}}
+        check_graph_matches(Path("cache/x"), state, {"Function": 3, "Module": 1})        # khớp → không lỗi
+        with self.assertRaisesRegex(ValueError, "different graph"):
+            check_graph_matches(Path("cache/x"), state, {"Function": 5, "Module": 2})
+        with self.assertRaisesRegex(ValueError, "did not load into Neo4j"):
+            check_graph_matches(Path("cache/x"), {**state, "neo4j_ingested": False}, state["nodes"])
+        with self.assertRaisesRegex(ValueError, "no index_state"):
+            check_graph_matches(Path("cache/x"), {}, {})
 
 
 class FileRankTest(unittest.TestCase):
@@ -101,6 +115,27 @@ class AstRankTest(unittest.TestCase):
         a = _toy_index().ast_rank("alpha gamma")
         b = _toy_index(vec_ids=["x:pkg/m.py:gamma", "x:pkg/m.py:alpha", "x:pkg/m.py:delta"]).ast_rank("alpha gamma")
         self.assertEqual(a, b)
+
+    def test_query_vector_not_taken_from_another_thread(self):
+        # Mô phỏng luồng khác ghi memo cho query khác ngay sau khi luồng này encode xong:
+        # _query_vec phải trả vector của chính query mình.
+        idx = _toy_index()
+        mine, other = np.array([0.0, 1.0], dtype=np.float32), np.array([1.0, 0.0], dtype=np.float32)
+
+        def encode(text):
+            idx._q_memo = ("other query", other)
+            return mine
+        idx._encode = encode
+        np.testing.assert_array_equal(idx._query_vec("alpha"), mine)
+
+    def test_repo_without_code_nodes(self):
+        # Repo không có node code: AST rỗng, pool DOC vẫn xếp được trên chunk
+        chunks = [{"id": "chunk:docs/a.rst:0", "file": "docs/a.rst", "heading": "Usage", "text": "alpha usage"}]
+        idx = RepoIndex([], [], ["chunk:docs/a.rst:0"], np.array([[1.0, 0.0]], dtype=np.float32),
+                        encode_query=lambda t: np.array([1.0, 0.0], dtype=np.float32), chunks=chunks)
+        self.assertEqual(idx.ast_rank("alpha"), [])
+        r = idx.doc_pool("alpha")
+        self.assertEqual((r["pool"], [x["id"] for x in r["items"]]), ("doc_cand_all", ["chunk:docs/a.rst:0"]))
 
     def test_missing_vector_warning(self):
         idx = _toy_index(vec_ids=["x:pkg/m.py:alpha", "x:pkg/m.py:delta"])

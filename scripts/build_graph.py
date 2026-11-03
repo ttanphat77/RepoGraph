@@ -6,7 +6,7 @@ Bốn chế độ:
                       clone repo tại đúng base_commit, parse và nạp vào Neo4j.
   local <path>      — Parse một thư mục local (không cần dataset).
   url <url>         — Clone từ git URL bất kỳ (GitHub/GitLab/...) và build graph.
-  update <path>     — Repo đã build: kéo commit mới (git pull --ff-only) rồi build lại.
+  update <path>     - Repo đã build: kéo commit mới (git pull --ff-only) rồi build lại.
                       Cache embedding, history, hunk và issue chỉ xử lý phần mới.
 
 Pipeline gồm 4 stage:
@@ -18,18 +18,18 @@ Pipeline gồm 4 stage:
       ASTEngine.resolve_cross_file() nhận kết quả tất cả files,
       xây index toàn cục, resolve call/inherit refs thành cạnh cụ thể.
 
-  Stage 2b — Doc layer (chỉ repo Python):
+  Stage 2b - Doc layer (chỉ repo Python):
       Document/DocChunk + cạnh HasChunk, Documents, References (pipeline/doc_extractor.py).
 
-  Stage 2c — Embeddings:
+  Stage 2c - Embeddings:
       Function/Class/DocChunk → {INDEX_ROOT}/{repo}/node_vectors.npy, cache theo nội dung.
 
-  Stage 2d — History layer (chỉ repo Python có git):
+  Stage 2d - History layer (chỉ repo Python có git):
       Commit nhánh chính trong HIST_YEARS năm trước HEAD, touch set và chỉ mục hunk
       (pipeline/history.py) → {INDEX_ROOT}/{repo}/history/. Commit sửa ít nhất một
       hàm/lớp của graph thành node Commit, kèm cạnh Modifies tới hàm/lớp đó.
 
-  Stage 2e — Issue layer (repo trên GitHub):
+  Stage 2e - Issue layer (repo trên GitHub):
       Tải issue/PR đã đóng (pipeline/issues.py), nối báo cáo với commit
       → {INDEX_ROOT}/{repo}/issues/. Issue được commit trong graph sửa thành node
       Issue, kèm cạnh Fixes (Commit → Issue).

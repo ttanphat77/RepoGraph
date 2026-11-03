@@ -1,5 +1,5 @@
 # =============================================================================
-# pipeline/history.py — Lớp history và hai nguồn HIST
+# pipeline/history.py - Lớp history và hai nguồn HIST
 #
 # Lớp history (mục 6.1 pipeline_design.md):
 #   Đơn vị là commit trên nhánh chính (git log --first-parent) trong HIST_YEARS năm
@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import functools
+import hashlib
 import json
 import keyword
 import logging
@@ -44,6 +45,7 @@ from nltk.stem.porter import PorterStemmer
 from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
 
 import config
+from pipeline.doc_extractor import _file_module
 from pipeline.oracle import _src_path, changed_lines, file_nodes_at, get_oracle
 from pipeline.ranking import tokenize_code
 from pipeline.repo_manager import filter_source_files
@@ -57,6 +59,8 @@ _NL_STOP = set(ENGLISH_STOP_WORDS) | {k.lower() for k in keyword.kwlist}   # sto
 _stem = functools.lru_cache(maxsize=None)(PorterStemmer().stem)
 _IDENT_RE = re.compile(r"`[^`\n]+`|[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\(?")
 _NAME_RE = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*")
+_LOCUS_MSG_CHARS = 2000   # độ dài message trong tài liệu Locus (hist-build của notebook cắt ở đây)
+_COUNTS_VERSION = 1       # đổi khi cách tách từ đổi, để cache ma trận đếm cũ không được dùng
 
 
 # ── Git ──────────────────────────────────────────────────────────────────────
@@ -124,13 +128,10 @@ def _read_jsonl(path: Path) -> list[dict]:
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
-    """Ghi qua file tạm rồi thay file cũ, để lần ghi bị dừng giữa chừng không để lại file cụt."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8") as f:
         for r in rows:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    tmp.replace(path)
 
 
 def build_history(repo_path: str, index_dir: str | Path, head: str = "HEAD") -> tuple[list[dict], dict]:
@@ -165,19 +166,22 @@ def build_hunks(repo_path: str, index_dir: str | Path, units: list[dict]) -> tup
     """
     Chỉ mục hunk của các commit có touch khác rỗng. Mỗi hunk:
     {"u": sha, "f": file (tên sau đổi tên), "k": thứ tự trong file, "ids": hàm/lớp mà hunk đổi, "text": hunk}.
-    Hunk của commit đã có trong hunks.jsonl được dùng lại.
+    Commit đã xử lý (ghi trong hunks_done.json, kể cả commit không cho hunk nào, vd chỉ đổi comment)
+    được dùng lại, không tính lại.
     """
     t0 = time.perf_counter()
     path = Path(index_dir) / "history" / "hunks.jsonl"
+    done_path = path.with_name("hunks_done.json")
     old: dict[str, list[dict]] = {}
     for r in _read_jsonl(path):
         old.setdefault(r["u"], []).append(r)
+    done = set(json.loads(done_path.read_text(encoding="utf-8"))) if done_path.exists() else set(old)
     rows, n_new = [], 0
     for u in units:
         if not u["touch"]:
             continue
-        if u["h"] in old:
-            rows += old[u["h"]]
+        if u["h"] in done:
+            rows += old.get(u["h"], [])
             continue
         n_new += 1
         diff = git_text(repo_path, "diff", "-U3", "-w", u["p"], u["h"], "--", "*.py")
@@ -198,6 +202,7 @@ def build_hunks(repo_path: str, index_dir: str | Path, units: list[dict]) -> tup
                 ids = sorted(pf.path + x[len(src):] for x in get_oracle(one, nodes)["nodes"] if lab.get(x) in _FC)
                 rows.append({"u": u["h"], "f": pf.path, "k": k, "ids": ids, "text": str(h)})
     _write_jsonl(path, rows)
+    done_path.write_text(json.dumps(sorted(u["h"] for u in units if u["touch"])), encoding="utf-8")
     return rows, {"hunks": len(rows), "new_commits": n_new, "seconds": round(time.perf_counter() - t0, 1)}
 
 
@@ -233,13 +238,33 @@ def hunk_body(text: str) -> str:
     return "\n".join(l[1:] for l in text.split("\n")[1:])
 
 
-def term_counts(docs: list[str], fn) -> tuple[sp.csr_matrix, dict[str, int]]:
-    """Ma trận đếm (hàng = tài liệu, cột = từ) và từ điển cột."""
+def term_counts(docs: list[str], fn, cache_path: Path | None = None) -> tuple[sp.csr_matrix, dict[str, int]]:
+    """
+    Ma trận đếm (hàng = tài liệu, cột = từ) và từ điển cột.
+
+    Với cache_path (file .npz): dùng lại ma trận đã lưu khi khóa trùng. Khóa là sha1 của
+    _COUNTS_VERSION, tên hàm tách từ và toàn văn các tài liệu, nên tài liệu đổi thì tính lại.
+    """
+    key = meta = None
+    if cache_path is not None:
+        h = hashlib.sha1(f"{_COUNTS_VERSION}:{fn.__name__}".encode("utf-8"))
+        for d in docs:
+            h.update(b"\0" + d.encode("utf-8"))
+        key, meta = h.hexdigest(), cache_path.with_suffix(".json")
+        if cache_path.exists() and meta.exists():
+            m = json.loads(meta.read_text(encoding="utf-8"))
+            if m.get("key") == key:
+                return sp.load_npz(cache_path).tocsr(), m["vocab"]
     vocab, r, c, v = {}, [], [], []
     for i, d in enumerate(docs):
         for t, k in Counter(fn(d)).items():
             r.append(i); c.append(vocab.setdefault(t, len(vocab))); v.append(k)
-    return sp.csr_matrix((v, (r, c)), shape=(len(docs), len(vocab)), dtype=np.float64), vocab
+    X = sp.csr_matrix((v, (r, c)), shape=(len(docs), len(vocab)), dtype=np.float64)
+    if cache_path is not None:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        sp.save_npz(cache_path, X)
+        meta.write_text(json.dumps({"key": key, "vocab": vocab}, ensure_ascii=False), encoding="utf-8")
+    return X, vocab
 
 
 def tfidf(X: sp.spmatrix) -> tuple[sp.csr_matrix, np.ndarray]:
@@ -271,12 +296,13 @@ def qvec(terms: list[str], vocab: dict[str, int], idf: np.ndarray) -> np.ndarray
 
 
 def graph_names(nodes: list[dict]) -> set[str]:
-    """Tên dùng cho CE: tên lớp và hàm, cùng tên module dạng chấm (src/flask/app.py → src.flask.app)."""
+    """Tên dùng cho CE: tên lớp và hàm, cùng tên module dạng chấm như người viết issue dùng
+    (src/flask/app.py → flask.app; bỏ tiền tố src. như lớp doc)."""
     out = {n["name"] for n in nodes if n["label"] in _FC and n.get("name")}
     for n in nodes:
         path = n.get("file") or n.get("name") or ""
         if n["label"] == "Module" and path.endswith(".py"):
-            out.add(path[:-3].replace("/", ".").removesuffix(".__init__"))
+            out.add(_file_module(path))
     return out
 
 
@@ -292,7 +318,7 @@ class LocusIndex:
     """Locus ở mức hàm/lớp trên chỉ mục hunk của HEAD."""
 
     def __init__(self, units: list[dict], hunks: list[dict], graph_fc: set[str],
-                 names: set[str], id_prefix: str):
+                 names: set[str], id_prefix: str, cache_dir: Path | None = None):
         """
         Args:
             units:     bản ghi commit (build_history).
@@ -300,13 +326,15 @@ class LocusIndex:
             graph_fc:  id Function/Class của graph hiện tại (có tiền tố id_prefix).
             names:     tên trong graph cho CE (graph_names).
             id_prefix: tiền tố id node của graph ("local" hoặc commit).
+            cache_dir: nơi lưu ma trận đếm từ (term_counts); None → không lưu.
         """
         self.prefix = id_prefix
         self.names = names
-        msg = {u["h"]: u["msg"] for u in units}
+        # Tài liệu = hunk + message cắt ở _LOCUS_MSG_CHARS ký tự, như file history của notebook
+        msg = {u["h"]: u["msg"][:_LOCUS_MSG_CHARS] for u in units}
         docs = [hunk_body(x["text"]) + "\n" + msg.get(x["u"], "") for x in hunks]
-        Xnl, self.nl_vocab = term_counts(docs, nl_terms)
-        Xce, self.ce_vocab = term_counts(docs, code_terms)
+        Xnl, self.nl_vocab = term_counts(docs, nl_terms, cache_dir / "locus_nl.npz" if cache_dir else None)
+        Xce, self.ce_vocab = term_counts(docs, code_terms, cache_dir / "locus_ce.npz" if cache_dir else None)
         self.Wnl, self.idf_nl = tfidf(Xnl)
         mask = np.zeros(len(self.ce_vocab))
         mask[[j for t, j in self.ce_vocab.items() if t in names]] = 1.0
@@ -356,13 +384,14 @@ class MsgIndex:
     """HIST theo phần lời: commit được xét, text(c), TF-IDF và ma trận commit × hàm/lớp."""
 
     def __init__(self, units: list[dict], graph_fc: set[str], id_prefix: str,
-                 links: dict[str, list[dict]] | None = None):
+                 links: dict[str, list[dict]] | None = None, cache_dir: Path | None = None):
         """
         Args:
             units:     bản ghi commit (build_history).
             graph_fc:  id Function/Class của graph hiện tại.
             id_prefix: tiền tố id node.
             links:     sha → báo cáo liên kết [{"n", "title", "body", "pr"}] (nguồn ISSUE).
+            cache_dir: nơi lưu ma trận đếm từ (term_counts); None → không lưu.
         """
         self.prefix = id_prefix
         links = links or {}
@@ -372,7 +401,7 @@ class MsgIndex:
         texts = [u["msg"] + "".join(f"\n{r['title']}\n{r['body']}" for r in links.get(u["h"], []))
                  for u in self.units]
         self.links = [sorted(int(r["n"]) for r in links.get(u["h"], [])) for u in self.units]
-        X, self.vocab = term_counts(texts, nl_terms)
+        X, self.vocab = term_counts(texts, nl_terms, cache_dir / "msg_nl.npz" if cache_dir else None)
         self.W, self.idf = tfidf(X)
         fn_vocab, tr, tc = {}, [], []
         for i, u in enumerate(self.units):

@@ -1,5 +1,5 @@
 """
-scripts/ask.py — Hỏi một lần trên repo đã build (giai đoạn 1 của app)
+scripts/ask.py - Hỏi một lần trên repo đã build (giai đoạn 1 của app)
 
     .venv\\Scripts\\python.exe scripts/ask.py "url_for raises BuildError when ..."
     .venv\\Scripts\\python.exe scripts/ask.py "..." --index cache/flask --json

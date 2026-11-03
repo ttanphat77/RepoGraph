@@ -18,7 +18,8 @@ import scipy.sparse as sp
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pipeline.history import (
-    LocusIndex, MsgIndex, build_history, build_hunks, code_terms, git_text, nl_terms, qvec, tfidf,
+    LocusIndex, MsgIndex, build_history, build_hunks, code_terms, git_text, graph_names, nl_terms, qvec,
+    term_counts, tfidf,
 )
 
 L2, L3, L15 = math.log(2), math.log(3), math.log(1.5)
@@ -45,6 +46,28 @@ class TextTest(unittest.TestCase):
         n = math.hypot(a, b)
         np.testing.assert_allclose(W.toarray()[0], [a / n, b / n, 0, 0])
         np.testing.assert_allclose(W.toarray()[2], [0, 0, 0, 1])
+
+    def test_graph_names_strip_src_layout(self):
+        nodes = [{"label": "Module", "name": "src/flask/helpers.py", "file": "src/flask/helpers.py"},
+                 {"label": "Module", "name": "pkg/__init__.py", "file": "pkg/__init__.py"},
+                 {"label": "Function", "name": "send_file", "file": "src/flask/helpers.py"}]
+        self.assertEqual(graph_names(nodes), {"flask.helpers", "pkg", "send_file"})
+
+    def test_term_counts_cache(self):
+        calls = []
+
+        def counting_terms(txt):
+            calls.append(txt)
+            return nl_terms(txt)
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d, "c.npz")
+            X1, v1 = term_counts(["alpha beta", "gamma"], counting_terms, p)
+            X2, v2 = term_counts(["alpha beta", "gamma"], counting_terms, p)      # đọc từ file
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(v1, v2)
+            self.assertEqual((X1 != X2).nnz, 0)
+            term_counts(["alpha beta", "delta"], counting_terms, p)              # tài liệu đổi → tính lại
+            self.assertEqual(len(calls), 4)
 
     def test_qvec_hand(self):
         v = qvec(["alpha", "alpha", "beta", "zzz"], {"alpha": 0, "beta": 1}, np.array([L15, L3]))
@@ -83,6 +106,18 @@ class LocusTest(unittest.TestCase):
         self.assertEqual([x["id"] for x in r["items"]], ["local:m.py:g", "local:m.py:f"])
         self.assertAlmostEqual(r["items"][0]["score"], 1 / math.sqrt(3))
         self.assertAlmostEqual(r["items"][1]["score"], 0.05)
+
+    def test_message_cut_at_2000_chars(self):
+        # Như file history của notebook, tài liệu Locus chỉ lấy 2.000 ký tự đầu của message.
+        # Hai tài liệu để idf của "zeta" khác 0 (một tài liệu thì idf mọi từ = log(1/1) = 0)
+        hunks = [{"u": "u9", "f": "m.py", "k": 0, "ids": ["m.py:g"], "text": "@@ -1 +1 @@\n-iota\n+theta"},
+                 {"u": "u8", "f": "m.py", "k": 0, "ids": ["m.py:h"], "text": "@@ -1 +1 @@\n-kappa\n+lambda"}]
+        other = _unit("u8", 0, "omega", ["m.py:h"])
+        fc = {"local:m.py:g", "local:m.py:h"}
+        far = LocusIndex([_unit("u9", 0, "omega " + "x" * 1995 + " zeta", ["m.py:g"]), other], hunks, fc, set(), "local")
+        near = LocusIndex([_unit("u9", 0, "omega zeta", ["m.py:g"]), other], hunks, fc, set(), "local")
+        self.assertEqual(far.rank("zeta", t_query=1)["items"], [])
+        self.assertEqual([x["id"] for x in near.rank("zeta", t_query=1)["items"]], ["local:m.py:g"])
 
     def test_function_not_in_graph_dropped(self):
         idx = LocusIndex([_unit("u2", 200, "omega", ["m.py:g"])],
@@ -183,6 +218,16 @@ class HistoryBuildTest(unittest.TestCase):
         self.assertEqual(units2[0]["touch"], ["pkg/mod.py:f"])
         hunks2, hs2 = build_hunks(self.repo, self.idx, units2)
         self.assertEqual((len(hunks2), hs2["new_commits"]), (3, 1))
+
+    def test_commit_without_hunks_not_recomputed(self):
+        # Thêm một dòng comment trong thân f: touch = [f] nhưng hunk chỉ đổi comment nên bị bỏ.
+        latest = BASE.replace("x = 1", "x = 2").replace("return 1", "return 2").replace("return 3", "return 4")
+        self._commit({"pkg/mod.py": latest.replace("    x = 2\n", "    x = 2\n    # note\n")}, "comment in f")
+        units, _ = build_history(self.repo, self.idx)
+        self.assertEqual(units[0]["touch"], ["pkg/mod.py:f"])
+        _, hs1 = build_hunks(self.repo, self.idx, units)
+        _, hs2 = build_hunks(self.repo, self.idx, units)
+        self.assertEqual((hs1["new_commits"], hs2["new_commits"]), (3, 0))
 
 
 if __name__ == "__main__":

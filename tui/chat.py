@@ -65,7 +65,6 @@ from textual.widgets import Footer, Input, Static
 import config
 from pipeline.context import format_sections, retrieve_kp
 from pipeline.evaluator import get_engine, run_prompt
-from pipeline.generator import count_section_tokens, stream_answer
 from pipeline.run_record import latest_index_dir, retrieval_block
 from tui.kp_render import kp_tables, metrics_line
 
@@ -166,9 +165,9 @@ def _header_panel(stats: dict | None, state: dict, index_dir: Path | None, model
         size = Text("—", style="dim")
 
     head = state.get("head_sha") or ""
-    repo = Text(f"{state.get('remote') or state.get('repo_path') or '—'}" + (f"@{head[:8]}" if head else ""))
+    repo = Text(f"{state.get('remote') or state.get('repo_path') or '-'}" + (f"@{head[:8]}" if head else ""))
     n = state.get("nodes") or {}
-    index = Text(str(index_dir) if index_dir else "— (run scripts/build_graph.py first)")
+    index = Text(str(index_dir) if index_dir else "- (run scripts/build_graph.py first)")
     if n:
         index.append(f" · code {n.get('Function', 0) + n.get('Class', 0):,} · doc chunks {n.get('DocChunk', 0):,}"
                      f" · commits {n.get('Commit', 0):,} · issues {n.get('Issue', 0):,}", style="dim")
@@ -488,12 +487,8 @@ class RepoGraphChat(App):
             turn.status = ""
             turn.answer += s
 
-        model = self.model
         try:
-            rec, run_dir = run_prompt(
-                msg, index_dir=self.index_dir, on_text=_on_text,
-                llm=lambda system, user, cb: stream_answer(system, user, cb, model=model),
-                counter=lambda parts: count_section_tokens(parts, model=model))
+            rec, run_dir = run_prompt(msg, index_dir=self.index_dir, on_text=_on_text, model=self.model)
             if not turn.answer:
                 turn.answer = (run_dir / "answer.md").read_text(encoding="utf-8")
             if rec.get("retrieval"):

@@ -1,5 +1,5 @@
 # =============================================================================
-# pipeline/ranking.py — Index truy hồi và xếp hạng cho một repo đã build
+# pipeline/ranking.py - Index truy hồi và xếp hạng cho một repo đã build
 #
 # RepoIndex nạp node code và cạnh Calls từ Neo4j, cùng vector từ
 # {index_dir}/node_vectors.npy, rồi dựng chỉ mục trong RAM.
@@ -94,6 +94,20 @@ def rrf_fuse(ast_ids: list[str], sources: dict[str, list[str]],
             for neg, _, x in scored[:limit]]
 
 
+def check_graph_matches(index_dir: Path, state: dict, neo4j_counts: dict[str, int]) -> None:
+    """
+    Báo lỗi khi Neo4j không giữ graph của index_dir: lần build không nạp xong vào Neo4j,
+    hoặc số node theo nhãn trong Neo4j khác số node mà lần build đó ghi trong index_state.json.
+    """
+    if not state:
+        raise ValueError(f"{index_dir} has no index_state.json. Build the repo first.")
+    if not state.get("neo4j_ingested"):
+        raise ValueError(f"The last build of {index_dir} did not load into Neo4j. Rebuild the repo.")
+    if neo4j_counts != state.get("nodes"):
+        raise ValueError(f"Neo4j holds a different graph than {index_dir} "
+                         f"(Neo4j {neo4j_counts}, index {state.get('nodes')}). Rebuild or update this repo.")
+
+
 def file_rank(items: list[dict], file_of: Callable[[str], str], limit: int | None = None) -> list[dict]:
     """
     Xếp file theo điểm cao nhất của hàm/lớp trong file (SweRank). items đã xếp giảm dần,
@@ -136,7 +150,7 @@ class RepoIndex:
         self._q_memo: tuple[str, np.ndarray] | None = None
 
         code_corpus = [tokenize_code(_bm25_text(n)) for n in self.nodes]
-        self.bm25 = BM25Okapi(code_corpus)
+        self.bm25 = BM25Okapi(code_corpus) if code_corpus else None   # BM25Okapi([]) chia cho 0
 
         # DOC: BM25 trên tập node code + chunk (như search_full của notebook), lấy điểm của chunk
         self.chunks = sorted(chunks or [], key=lambda c: c["id"])
@@ -183,15 +197,23 @@ class RepoIndex:
     # ── Nạp từ build ─────────────────────────────────────────────────────────
     @classmethod
     def load(cls, index_dir: str | Path, driver=None) -> "RepoIndex":
-        """Nạp node code và cạnh Calls từ Neo4j, vector và index_state.json từ index_dir."""
+        """
+        Nạp node code và cạnh Calls từ Neo4j, vector và index_state.json từ index_dir.
+        Neo4j chỉ giữ graph của một repo, nên trước hết kiểm graph trong Neo4j là graph của index_dir.
+        """
         from neo4j import GraphDatabase
         index_dir = Path(index_dir)
+        state_path = index_dir / "index_state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
         own = driver is None
         if own:
             driver = GraphDatabase.driver(config.NEO4J_URI,
                                           auth=(config.NEO4J_USER, config.NEO4J_PASSWORD))
         try:
             with driver.session() as s:
+                counts = {r["l"]: r["c"] for r in s.run(
+                    "MATCH (n) RETURN labels(n)[0] AS l, count(*) AS c")}
+                check_graph_matches(index_dir, state, counts)
                 nodes = [dict(r) for r in s.run(
                     "MATCH (n) WHERE n:Module OR n:Class OR n:Function "
                     "RETURN n.id AS id, labels(n)[0] AS label, n.name AS name, "
@@ -209,15 +231,16 @@ class RepoIndex:
                 driver.close()
         vec_ids = json.loads((index_dir / "node_ids.json").read_text(encoding="utf-8"))
         vecs = np.load(index_dir / "node_vectors.npy")
-        state_path = index_dir / "index_state.json"
-        state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
         return cls(nodes, calls, vec_ids, vecs, state, chunks=chunks, doc_edges=docs)
 
     def _query_vec(self, query: str) -> np.ndarray:
-        """Vector của query, nhớ lại cho lần gọi kế tiếp với cùng query (ast_rank rồi doc_pool)."""
-        if self._q_memo is None or self._q_memo[0] != query:
-            self._q_memo = (query, self._encode(embed_query_text(query)))
-        return self._q_memo[1]
+        """Vector của query, nhớ lại cho lần gọi kế tiếp với cùng query (ast_rank rồi doc_pool).
+        Đọc và ghi memo qua biến cục bộ, vì nhiều luồng có thể dùng chung một RepoIndex."""
+        memo = self._q_memo
+        if memo is None or memo[0] != query:
+            memo = (query, self._encode(embed_query_text(query)))
+            self._q_memo = memo
+        return memo[1]
 
     # ── Xếp hạng AST ─────────────────────────────────────────────────────────
     def ast_rank(self, query: str, depth: int = config.AST_DEPTH) -> list[dict]:
@@ -234,6 +257,8 @@ class RepoIndex:
             [{"id", "score", "bm25_rank", "bm25_score", "vec_rank", "cos"}], hạng 1-based,
             None khi node không nằm trong depth node đầu của tín hiệu đó.
         """
+        if self.bm25 is None:            # repo không có node code
+            return []
         bm = self.bm25.get_scores(tokenize_code(query))
         q = self._query_vec(query)
         cos = self.vec_matrix @ q if len(self.vec_ids) else np.zeros(0)
@@ -332,7 +357,7 @@ class RepoIndex:
         Xếp theo hạng AST (node ngoài danh sách AST đứng sau), rồi theo id.
 
         Returns:
-            {"callers": [...], "callees": [...], "n_callers", "n_callees"} — mỗi phần tử là
+            {"callers": [...], "callees": [...], "n_callers", "n_callees"} - mỗi phần tử là
             brief(node) kèm ast_rank.
         """
         def _side(ids):

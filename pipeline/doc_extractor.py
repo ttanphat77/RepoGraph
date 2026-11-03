@@ -1,5 +1,5 @@
 # =============================================================================
-# pipeline/doc_extractor.py — Lớp doc của graph đa nguồn
+# pipeline/doc_extractor.py - Lớp doc của graph đa nguồn
 #
 # Thiết kế: mục 2.2 pipeline_design.md (đã dùng ở các lượt v3, v4 của notebook).
 #
@@ -65,7 +65,7 @@ def get_doc_files(repo_path: str) -> list[str]:
     out = []
     for ext in ("*.rst", "*.md", "*.txt"):  # Django viết doc RST trong file .txt
         for p in sorted(docs_dir.rglob(ext)):
-            if any(part in _DOC_SKIP for part in p.parts):
+            if any(part in _DOC_SKIP for part in p.relative_to(repo).parts):   # chỉ xét phần trong repo
                 continue
             if p.suffix == ".txt" and p.name.lower().startswith(("requirements", "robots")):
                 continue

@@ -32,6 +32,11 @@ NODE_STYLES = {
     "Module":   {"color": "#3388ff", "size": 28},   # to nhất — file level
     "Class":    {"color": "#ff7700", "size": 18},   # trung bình
     "Function": {"color": "#22cc66", "size": 10},   # nhỏ nhất — leaf nodes
+    # Tầng doc, history, issue. Khóa caption là thuộc tính dùng làm nhãn node, mặc định là "name".
+    "Document": {"color": "#17becf", "size": 20, "caption": "title"},
+    "DocChunk": {"color": "#9edae5", "size": 8,  "caption": "heading"},
+    "Commit":   {"color": "#f781bf", "size": 8,  "caption": "sha"},
+    "Issue":    {"color": "#a6761d", "size": 12, "caption": "title"},
 }
 
 # Màu và style cho từng loại edge
@@ -40,6 +45,11 @@ EDGE_STYLES = {
     "Calls":    {"color": "#ff4c4c", "width": 2, "dashes": "false"},  # đỏ — gọi hàm
     "Imports":  {"color": "#ffd700", "width": 2, "dashes": "true"},   # vàng nét đứt
     "Inherits": {"color": "#bf5fff", "width": 2, "dashes": "false"},  # tím — kế thừa
+    "HasChunk":   {"color": "#4a6a70", "width": 1, "dashes": "false"},  # file doc → chunk
+    "Documents":  {"color": "#17becf", "width": 1, "dashes": "true"},   # chunk → hàm/lớp
+    "References": {"color": "#9edae5", "width": 1, "dashes": "true"},   # chunk → file doc
+    "Modifies":   {"color": "#f781bf", "width": 1, "dashes": "false"},  # commit → hàm/lớp
+    "Fixes":      {"color": "#a6761d", "width": 2, "dashes": "false"},  # commit → issue
 }
 
 
@@ -70,7 +80,7 @@ def _build_labels_js() -> str:
     for label, style in NODE_STYLES.items():
         parts.append(
             f'{label}: {{'
-            f'label: "name", '
+            f'label: "{style.get("caption", "name")}", '
             f'[NeoVis.NEOVIS_ADVANCED_CONFIG]: {{'
             f'static: {{ shape: "dot", size: {style["size"]}, color: "{style["color"]}" }}'
             f'}}}}'
@@ -261,6 +271,26 @@ def _render_neovis(cypher: str, query_seed_ids: list = None, query_sub_ids: list
       <span class="dot" style="background:#22cc66"></span>
       <span>Function</span>
     </label>
+    <label class="legend-item">
+      <input type="checkbox" id="f-Document" checked onchange="toggleNodeType('Document',this.checked)">
+      <span class="dot" style="background:#17becf"></span>
+      <span>Document</span>
+    </label>
+    <label class="legend-item">
+      <input type="checkbox" id="f-DocChunk" checked onchange="toggleNodeType('DocChunk',this.checked)">
+      <span class="dot" style="background:#9edae5"></span>
+      <span>DocChunk</span>
+    </label>
+    <label class="legend-item">
+      <input type="checkbox" id="f-Commit" checked onchange="toggleNodeType('Commit',this.checked)">
+      <span class="dot" style="background:#f781bf"></span>
+      <span>Commit</span>
+    </label>
+    <label class="legend-item">
+      <input type="checkbox" id="f-Issue" checked onchange="toggleNodeType('Issue',this.checked)">
+      <span class="dot" style="background:#a6761d"></span>
+      <span>Issue</span>
+    </label>
 
     <hr class="divider">
 
@@ -285,6 +315,31 @@ def _render_neovis(cypher: str, query_seed_ids: list = None, query_sub_ids: list
       <input type="checkbox" id="f-Inherits" checked onchange="toggleEdgeType('Inherits',this.checked)">
       <span class="edge-line" style="background:#bf5fff"></span>
       <span>Inherits</span>
+    </label>
+    <label class="legend-item">
+      <input type="checkbox" id="f-HasChunk" checked onchange="toggleEdgeType('HasChunk',this.checked)">
+      <span class="edge-line" style="background:#4a6a70"></span>
+      <span>HasChunk</span>
+    </label>
+    <label class="legend-item">
+      <input type="checkbox" id="f-Documents" checked onchange="toggleEdgeType('Documents',this.checked)">
+      <span class="edge-dashed" style="border-color:#17becf"></span>
+      <span>Documents</span>
+    </label>
+    <label class="legend-item">
+      <input type="checkbox" id="f-References" checked onchange="toggleEdgeType('References',this.checked)">
+      <span class="edge-dashed" style="border-color:#9edae5"></span>
+      <span>References</span>
+    </label>
+    <label class="legend-item">
+      <input type="checkbox" id="f-Modifies" checked onchange="toggleEdgeType('Modifies',this.checked)">
+      <span class="edge-line" style="background:#f781bf"></span>
+      <span>Modifies</span>
+    </label>
+    <label class="legend-item">
+      <input type="checkbox" id="f-Fixes" checked onchange="toggleEdgeType('Fixes',this.checked)">
+      <span class="edge-line" style="background:#a6761d"></span>
+      <span>Fixes</span>
     </label>
 
     <hr class="divider">
@@ -350,8 +405,9 @@ def _render_neovis(cypher: str, query_seed_ids: list = None, query_sub_ids: list
     const edgeOrigWidth = {{}};
 
     // Visibility sets — quản lý bởi filter checkboxes
-    const visibleNodeTypes = new Set(['Module', 'Class', 'Function']);
-    const visibleEdgeTypes = new Set(['Defines', 'Calls', 'Imports', 'Inherits']);
+    const visibleNodeTypes = new Set(['Module', 'Class', 'Function', 'Document', 'DocChunk', 'Commit', 'Issue']);
+    const visibleEdgeTypes = new Set(['Defines', 'Calls', 'Imports', 'Inherits',
+                                      'HasChunk', 'Documents', 'References', 'Modifies', 'Fixes']);
 
     /* ── Color helpers ──────────────────────────────────────────────────── */
     const DIM = 'rgba(200,200,200,0.12)';  // màu mờ cho node không highlight

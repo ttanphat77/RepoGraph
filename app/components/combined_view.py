@@ -165,7 +165,7 @@ def _render_result(result: dict, gt_files: list[str]) -> None:
     ]
     for title, items, cols in sections:
         rows = _rows(items, cols)
-        with st.expander(f"{title} — {len(rows)} items", expanded=title.startswith("[C]")):
+        with st.expander(f"{title} - {len(rows)} items", expanded=title.startswith("[C]")):
             if rows:
                 st.dataframe(rows, use_container_width=True, hide_index=True)
             else:
@@ -178,7 +178,7 @@ def _render_result(result: dict, gt_files: list[str]) -> None:
         st.caption("Câu trả lời không có dòng FILE:.")
     else:
         lines = [f"{_file_status_icon(f, gt_files, predicted_files)}  `{f}`" for f in predicted_files]
-        lines += [f"🎯  `{f}` *(GT — missed)*" for f in gt_files if f not in predicted_files]
+        lines += [f"🎯  `{f}` *(GT - missed)*" for f in gt_files if f not in predicted_files]
         st.markdown("\n\n".join(lines))
 
     if gt_files and predicted_files:

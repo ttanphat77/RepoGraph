@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pipeline.issues import (
-    IssueIndex, RateLimited, commit_texts, fetch_reports, github_slug, issue_links, pr_of,
+    IssueIndex, RateLimited, commit_texts, fetch_reports, github_slug, issue_links, pr_of, rate_limited,
 )
 
 SLUG = "pallets/flask"
@@ -36,6 +36,14 @@ class LinkTest(unittest.TestCase):
         self.assertEqual(github_slug("git@github.com:pallets/flask.git"), SLUG)
         self.assertIsNone(github_slug("https://gitlab.com/a/b"))
         self.assertIsNone(github_slug(None))
+
+    def test_rate_limited(self):
+        self.assertTrue(rate_limited(429, {}))
+        self.assertTrue(rate_limited(403, {"X-RateLimit-Remaining": "0"}))      # giới hạn chính
+        self.assertTrue(rate_limited(403, {"Retry-After": "60"}))               # giới hạn phụ
+        self.assertFalse(rate_limited(403, {"X-RateLimit-Remaining": "57"}))    # thiếu quyền, không phải hết lượt
+        self.assertFalse(rate_limited(403, {}))
+        self.assertFalse(rate_limited(401, {}))
 
     def test_pr_of(self):
         self.assertEqual(pr_of("Merge pull request #100 from x/y\n\nbody"), 100)
@@ -95,6 +103,12 @@ class SimiScoreTest(unittest.TestCase):
 
     def test_empty(self):
         self.assertEqual(IssueIndex([], [], {}, set(), "local").rank("x"), {"items": [], "pool": []})
+
+    def test_reports_without_terms(self):
+        # Báo cáo chỉ gồm stopword: không còn từ nào để tính TF-IDF, nên không xếp hạng thay vì báo lỗi
+        reps = [_rep(1, "the", "and of")]
+        idx = IssueIndex(reps, [_unit("u1", "", ["m.py:f"])], {(1, "u1"): "fixed"}, {"local:m.py:f"}, "local")
+        self.assertEqual(idx.rank("crash"), {"items": [], "pool": []})
 
 
 def _item(n, title, pr=False):

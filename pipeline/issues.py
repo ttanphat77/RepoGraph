@@ -1,5 +1,5 @@
 # =============================================================================
-# pipeline/issues.py — Nguồn ISSUE: báo cáo lỗi cũ đã sửa (GitHub)
+# pipeline/issues.py - Nguồn ISSUE: báo cáo lỗi cũ đã sửa (GitHub)
 #
 # Thiết kế: mục 7 pipeline_design.md.
 #
@@ -78,15 +78,25 @@ def _http(url: str, token: str = "") -> tuple[str | None, dict]:
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 return None, {}
-            if e.code in (403, 429):
+            if rate_limited(e.code, e.headers):
                 reset = e.headers.get("X-RateLimit-Reset")
                 raise RateLimited(float(reset) if reset else None)
             if e.code < 500:
-                raise
+                raise                                   # vd 403 vì thiếu quyền: báo lỗi thật, không chờ
         except (urllib.error.URLError, TimeoutError, ConnectionError):
             pass
         time.sleep(min(60, 5 * 2 ** attempt))
     raise RuntimeError(f"cannot fetch {url}")
+
+
+def rate_limited(code: int, headers) -> bool:
+    """
+    GitHub hết lượt gọi: 429, hoặc 403 có X-RateLimit-Remaining = 0 (giới hạn chính)
+    hoặc có Retry-After (giới hạn phụ). 403 khác (thiếu quyền, repo bị chặn) không phải hết lượt.
+    """
+    if code == 429:
+        return True
+    return code == 403 and (headers.get("X-RateLimit-Remaining") == "0" or headers.get("Retry-After") is not None)
 
 
 def _iso(ts: str) -> int:
@@ -212,7 +222,8 @@ class IssueIndex:
         self.docs = [r for r in reports if not r["pr"]]
         pos = {r["n"]: j for j, r in enumerate(self.docs)}
         X, self.vocab = term_counts([r["title"] + "\n" + r["body"] for r in self.docs], issue_terms)
-        self.tr = TfidfTransformer(sublinear_tf=True).fit(X) if X.shape[0] else None
+        # Không báo cáo nào, hoặc báo cáo không có từ nào sau khi lọc stopword → không xếp hạng
+        self.tr = TfidfTransformer(sublinear_tf=True).fit(X) if X.shape[0] and X.shape[1] else None
         self.W = self.tr.transform(X) if self.tr is not None else X
         touch = {u["h"]: u["touch"] for u in units}
         fn_vocab, r, c, ty_of = {}, [], [], defaultdict(set)
