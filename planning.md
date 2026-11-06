@@ -1,40 +1,72 @@
-# Kế hoạch RepoGraph: từ việc 1.2 đến hết giai đoạn 2
+# Kế hoạch RepoGraph
 
-Cập nhật ngày 29/10/2026 (mục 6.18 và 14.18). Trạng thái mới nhất của mục 14 nằm ở mục 14.18. Kết quả của từng lượt chạy nằm ở `experiment_log.md`.
+Cập nhật ngày 04/11/2026. Hướng đi mới nhất nằm ở mục 1, mục 3 và mục 6.19. Trạng thái mới nhất nằm ở mục 14.19. Kết quả của từng lượt chạy nằm ở `experiment_log.md`.
 
 File này gom toàn bộ kế hoạch đang làm vào một chỗ. Nó thay cho file cũ `~/.claude/plans/partitioned-sprouting-stardust.md`. File cũ chỉ có 4 hệ thống và chưa có nguồn ISSUE. Phần mở đầu của file cũ còn ghi sai mục tiêu, vì nó coi quy trình debug là mục tiêu của đề tài.
 
-Phạm vi của đợt này là tới hết giai đoạn 2, theo yêu cầu "hãy implement đến giai đoạn 2". Giai đoạn 3 và 4 chỉ được nêu để thấy toàn cảnh. Từ ngày 27/10/2026, giai đoạn 3 không còn là bước xác nhận trên repo giữ lại (quyết định 58 của `research_context.md`).
+Từ ngày 04/11/2026, trọng tâm của đề tài là vai trò ngữ nghĩa của các nguồn dữ liệu (mục 1). Các mục 4 đến 6.18 và các mục 14.0 đến 14.18 được giữ làm lịch sử thiết kế. Khi một đoạn cũ khác với mục 1, mục 3 hoặc mục 6.19, thì ba mục này có hiệu lực.
 
 ---
 
 ## 1. Mục tiêu đề tài
 
-Đề tài cần chứng minh rằng dữ liệu đa nguồn giúp định vị lỗi tốt hơn so với chỉ dùng code. Định vị lỗi là bài toán xếp hạng các hàm và lớp trong repository theo khả năng phải sửa để đóng một issue.
+Đề tài cần chứng minh rằng dữ liệu đa nguồn mang lại cho định vị lỗi những giá trị mà code một mình không có. Định vị lỗi gồm hai việc. Việc thứ nhất là tìm các hàm và lớp phải sửa để đóng một issue. Việc thứ hai là hiểu vì sao phải sửa chúng và phải sửa theo hướng nào.
+
+**Câu hỏi trung tâm.** Mỗi nguồn dữ liệu đóng vai trò ngữ nghĩa gì trong định vị lỗi, và các vai trò đó bổ sung cho nhau thế nào?
+
+Vai trò ngữ nghĩa của một nguồn là loại thông tin mà nguồn đó cung cấp cho người sửa lỗi. Ví dụ, code cho biết hàm nào gọi hàm nào. Tài liệu cho biết hàm đó phải làm gì. Báo cáo lỗi cũ cho biết lỗi tương tự đã xảy ra ra sao.
 
 Đề tài dùng bốn nguồn dữ liệu.
 
-| Nguồn | Nội dung | Ví dụ |
-|---|---|---|
-| Code (AST) | Hàm, lớp, module và quan hệ giữa chúng | Hàm `QuerySet.filter` gọi `Query.add_q` |
-| DOC | File tài liệu bên ngoài code, chia thành các DocChunk | Một đoạn trong `docs/ref/models/querysets.txt` |
-| HIST | Các commit cũ đã sửa code | Một commit "Fixed #31423 -- ..." đã sửa `Query.add_q` |
-| ISSUE | Các báo cáo lỗi cũ đã được sửa xong | Ticket Trac #30000 cùng các commit đã sửa nó |
+| Nguồn | Nội dung | Ví dụ | Vai trò ngữ nghĩa | Thước đo |
+|---|---|---|---|---|
+| Code (AST) | Hàm, lớp, module và quan hệ giữa chúng | Hàm `QuerySet.filter` gọi `Query.add_q` | Code nằm ở đâu và liên quan với nhau thế nào | Gold |
+| DOC | File tài liệu bên ngoài code, chia thành các DocChunk | Một đoạn trong `docs/ref/models/querysets.txt` | Chương trình phải làm gì, API dùng thế nào | Judge |
+| HIST | Các commit cũ đã sửa code | Một commit "Fixed #31423 -- ..." đã sửa `Query.add_q` | Code đã đổi ra sao và vì sao | Judge cho phần thông tin, gold cho danh sách hàm/lớp suy ra từ history |
+| ISSUE | Các báo cáo lỗi cũ đã được sửa xong | Ticket Trac #30000 cùng các commit đã sửa nó | Lỗi nào đã xảy ra và vì sao | Judge |
+
+Cột vai trò ngữ nghĩa là giả thuyết. Giả thuyết này được kiểm tra bằng kết quả của judge (mục 1.2).
+
+Đề tài đánh giá ở hai tầng.
+
+- **Tầng vị trí.** Gold đo việc hàm hoặc lớp bị sửa có được xếp cao hay không. Tầng này trả lời câu hỏi "code nằm ở đâu".
+- **Tầng ngữ nghĩa.** LLM judge đo thông tin mà từng phần tử bằng chứng cung cấp. Tầng này trả lời câu hỏi "nguồn này cho biết điều gì". Gold không đo được tầng này. Theo judge v6, 83% phần tử DOC hữu ích và 75% phần tử ISSUE hữu ích không nối tới gold.
+
+Kết quả xếp hạng của +DOC và +ISSUE không phải thước đo chính của hai nguồn này. Các kết quả đó chỉ cho biết dùng hai nguồn này làm lá phiếu xếp hạng có giúp hay không.
 
 Quy trình debug của developer chỉ là hình mẫu để thiết kế luồng HIST. Nó không phải mục tiêu của đề tài.
 
 ### 1.1 Hiện trạng kết luận
 
-> Cập nhật 27/10/2026. Kết luận dưới đây theo lượt v4-L7, với RRF gốc và không tham số nào chọn trên dữ liệu. Chi tiết ở mục 8 của `research_context.md` và mục 9 của `experiment_log.md`.
+> Cập nhật 04/11/2026. Số của tầng vị trí lấy từ lượt v4-L8 và v4-L9 (mục 10 và 14 của `experiment_log.md`). Số của judge v6 lấy từ output của lượt ngày 03/11/2026, chưa được ghi vào `experiment_log.md`. Lần soi nhãn nằm ở mục 6.19.5.
 
-- **Thêm HIST giúp ở mọi độ đo.** Trên 1.187 instance của Django và SymPy, +HIST tăng Top@1 từ 23,8% lên 27,9%, Top@10 từ 55,5% lên 62,4% và MAP từ 0,265 lên 0,309, có ý nghĩa sau Holm.
-- **Đủ bốn nguồn cho kết quả hai chiều.** +ALL tăng Top@10 lên 59,6%, nhưng giảm Top@1 còn 19,1% và MAP còn 0,241, đều có ý nghĩa. DOC và ISSUE đứng riêng làm kết quả kém hơn AST ở mọi độ đo.
-- **Kết luận rộng chưa được chứng minh.** Câu "dữ liệu đa nguồn nói chung tốt hơn chỉ dùng code" chưa đúng ngay trên hai repo, vì +ALL kém AST ở Top@1 và MAP. Kết quả còn ba giới hạn.
-  1. Chỉ có hai repo.
-  2. Gold và HIST dùng chung một oracle.
-  3. Snapshot chỉ là phép xấp xỉ của trạng thái code lúc issue xảy ra.
+- **Tầng vị trí.** Trên 2.214 instance của 12 repo, AST có Top@10 54,2 và MRR 0,331. +HIST (Locus) đạt 59,2 và 0,375. Ở lượt v4-L8, mức tăng này có ý nghĩa ở mọi độ đo chính, và ΔMRR dương ở cả 12 repo. HIST theo phần lời (`hist-msg`) đạt 54,4 và 0,331, không khác AST. Khi làm lá phiếu xếp hạng, +DOC đạt Top@10 39,5, +ISSUE đạt 44,4 và +ALL đạt 53,7.
+- **Tầng ngữ nghĩa.** Mỗi nguồn cho một loại thông tin khác nhau.
+  - DOC chủ yếu cho cách dùng API và hành vi mong đợi. Hai loại này đứng đầu ở cả judge v5 và v6.
+  - ISSUE chủ yếu cho lỗi đã xảy ra. Ở v5, loại đứng đầu là lỗi tương tự (70,3%). Ở v6, loại đứng đầu trong nhóm không phải vị trí code là nguyên nhân lỗi (48,1%).
+  - HIST cho thay đổi trước đây và lý do thiết kế. Số này chỉ có ở judge v5, vì lượt judge v6 không chấm HIST.
+- **Bổ sung giữa các nguồn.** Theo judge v6, 75,4% instance có phần tử hữu ích từ DOC hoặc ISSUE. Ở nhóm mà AST không đưa gold vào top 10, tỷ lệ này là 72,2%.
+- **Vai trò phụ thuộc điều kiện.** Tỷ lệ pool DOC có phần tử hữu ích là 2,9% ở pylint (độ phủ doc 0,2%) và 65,5% ở django (độ phủ doc 17,7%). ISSUE ổn định hơn, từ 45,2% tới 75,5%. DOC vẫn có phần tử hữu ích ở 38,9% instance mà gold không có cạnh `Documents`.
+- **Độ tin cậy của phép đo chưa đủ.** Lần soi 995 nhãn v6 cho thấy điểm hữu ích sai ở 25,1% nhãn. Chỉ 34,6% nhãn được từ 2 điểm là đúng. Loại thông tin sai ở 26,4% nhãn. Chưa có nhãn người. Vì vậy hướng của các kết quả trên dùng được, nhưng các con số cụ thể chưa dùng được để kết luận.
+- **Chưa đo.** Thông tin ngữ nghĩa có giúp ích thật khi định vị lỗi hay không (câu S4 ở mục 1.2).
 
-Đề tài không chia dữ liệu thành tập dùng để chọn và tập dùng để xác nhận, vì không huấn luyện model (quyết định 58 của `research_context.md`). 10 repo còn lại của tập test là thêm dữ liệu cho cùng một thực nghiệm.
+Kết quả còn ba giới hạn chung.
+1. Gold, HIST và ISSUE dùng chung một oracle.
+2. Snapshot chỉ là phép xấp xỉ của trạng thái code lúc issue xảy ra, và việc kiểm tra snapshot chưa làm.
+3. Các instance cùng snapshot dùng chung graph và history, nên không độc lập với nhau.
+
+Đề tài không chia dữ liệu thành tập dùng để chọn và tập dùng để xác nhận, vì không huấn luyện model (quyết định 58 của `research_context.md`). 12 repo là một thực nghiệm.
+
+### 1.2 Câu hỏi nghiên cứu
+
+| Câu hỏi | Nội dung | Cách đo |
+|---|---|---|
+| S1 | Mỗi nguồn cung cấp loại thông tin nào? | Bảng nguồn nhân loại thông tin từ nhãn judge đã xác nhận |
+| S2 | Các nguồn có khác nhau về loại thông tin không, và có bổ sung cho nhau trong cùng một instance không? | So phân bố loại thông tin giữa các nguồn. Đếm theo từng loại thông tin các instance chỉ có một nguồn cung cấp |
+| S3 | Vai trò của mỗi nguồn thay đổi theo điều kiện nào? | Tách theo độ phủ doc, độ khó của AST và việc issue có nêu tên gold |
+| S4 | Thông tin ngữ nghĩa có giúp ích khi định vị lỗi không? | So cùng một agent khi có và không có bằng chứng |
+
+Q1 đến Q7, G1 và G2 ở mục 6.2 và 6.16 là các câu hỏi của tầng vị trí.
 
 ---
 
@@ -46,7 +78,7 @@ Quy trình debug của developer chỉ là hình mẫu để thiết kế luồn
 - **Oracle.** Hàm `get_oracle` trong notebook. Nó đọc một diff và trả về các hàm/lớp bị sửa. Gold của instance và cạnh Modifies của HIST cùng dùng hàm này.
 - **Không tách dev và test.** Ở v2 và v3, 180 instance thuộc SWE-bench Lite là tập dev dùng để chọn tham số, còn 1.006 instance còn lại là tập test. Từ v4, mọi kết quả đều dùng cả 1.186 instance. Từ ngày 27/10/2026, không tham số nào được chọn trên dữ liệu (quyết định 57), và đề tài không chia dữ liệu (quyết định 58).
 - **Rò rỉ dữ liệu (leakage).** Hệ thống dùng thông tin mà lúc issue xảy ra chưa thể có. Ví dụ dùng commit đã sửa chính issue đó. Đề tài chống rò rỉ bằng mốc cắt thời gian và điều kiện tổ tiên của snapshot.
-- **RRF (Reciprocal Rank Fusion).** Cách gộp nhiều danh sách xếp hạng. Mỗi node nhận điểm 1/(60 + hạng AST), cộng thêm p/(60 + vị trí của node trong danh sách của nguồn). p là trọng số của nguồn. h là số node đầu của AST được giữ nguyên vị trí. Ví dụ, với h = 3, ba node đầu của AST không bao giờ bị đẩy xuống, nên Hit@1 đến Hit@3 không thể giảm. Ở v3, hàm thực hiện là `fused_multi` trong cell `scale-fusion`. Cả hai đã bị bỏ khỏi notebook ngày 27/10/2026. Từ ngày 27/10/2026, cell `v4-fusion` của v4 dùng RRF gốc của Cormack và cộng sự (SIGIR 2009). Trong RRF gốc, mọi danh sách có trọng số 1, và không node nào được giữ cố định.
+- **RRF (Reciprocal Rank Fusion).** Cách gộp nhiều danh sách xếp hạng. Từ ngày 27/10/2026, cell `v4-fusion` dùng RRF gốc của Cormack và cộng sự (SIGIR 2009). Mỗi node nhận tổng các điểm 1/(60 + hạng của node trong từng danh sách). Mọi danh sách có trọng số 1, và không node nào được giữ cố định. Bản RRF có trọng số p và h node cố định của v3 đã bị bỏ.
 - **Hit@10 (any-gold).** Tỷ lệ instance có ít nhất một gold trong 10 node đầu. Ví dụ instance có 3 gold, và chỉ 1 gold ở hạng 7. Instance đó vẫn được tính là trúng.
 - **Acc@10.** Tỷ lệ instance có mọi gold trong 10 node đầu. Đây là độ đo của LocAgent và SweRank.
 - **MRR.** Trung bình của RR trên mọi instance. RR của một instance bằng 1 chia hạng của gold tốt nhất, và bằng 0 khi mọi gold nằm ngoài hạng 500. Ví dụ gold tốt nhất ở hạng 4 thì RR là 0,25.
@@ -55,6 +87,10 @@ Quy trình debug của developer chỉ là hình mẫu để thiết kế luồn
 - **Số node phải đọc.** Số hàm/lớp mà một người đọc lý tưởng phải đọc trước khi gặp gold. Người đó bắt đầu từ k node đầu của hệ thống, rồi mở rộng dần sang các node kề trên graph code. Ví dụ, top 10 không có gold, còn lớp kề đầu tiên có 40 node và 1 gold. Khi đó số node phải đọc là 10 + 41/2 = 30,5.
 - **McNemar.** Kiểm định cho độ đo đúng/sai như Hit@10. Nó chỉ dùng các instance mà hai hệ thống cho kết quả khác nhau. Ví dụ có 71 instance chỉ hệ thống mới trúng, và 19 instance chỉ AST trúng.
 - **Bootstrap theo khối snapshot.** Cách tính khoảng tin cậy bằng việc lấy mẫu lại theo snapshot thay vì theo instance. Lý do là các instance cùng snapshot dùng chung graph và history, nên chúng không độc lập với nhau.
+- **Vai trò ngữ nghĩa.** Loại thông tin mà một nguồn dữ liệu cung cấp cho người sửa lỗi (mục 1).
+- **Tầng vị trí và tầng ngữ nghĩa.** Hai tầng đánh giá của đề tài. Tầng vị trí dùng gold. Tầng ngữ nghĩa dùng LLM judge.
+- **Loại thông tin.** Nhãn mà judge gắn cho một phần tử bằng chứng, ví dụ `api_usage` hay `past_change`. Đây là thước đo chính của vai trò ngữ nghĩa.
+- **Soi nhãn.** Việc đọc issue, bản vá, phần tử và nhãn của judge, rồi ghi nhãn đúng hay sai và sai kiểu gì (mục 6.19.5).
 - **TRisk.** Độ đo rủi ro của Dinçer, Macdonald và Ounis (SIGIR 2014). Phần giảm so với AST bị phạt (1 + α) lần, rồi chia cho sai số chuẩn. TRisk lớn hơn 2 nghĩa là hệ thống tốt hơn AST một cách đáng tin, dù phần giảm đã bị phạt. TRisk nhỏ hơn −2 nghĩa là hệ thống rủi ro hơn AST.
 
 ---
@@ -68,9 +104,12 @@ Quy trình debug của developer chỉ là hình mẫu để thiết kế luồn
 | 1.2 | Tính lại v3 với oracle đã sửa, xếp hạng tới 500 và quy tắc thống kê thống nhất | Xong ở lượt 1 (cell `v3-recheck`, đã bỏ khỏi notebook ngày 27/10/2026). Kết luận hẹp giữ nguyên: Top@10 tăng từ 55,5% (AST) lên 61,2% (DOC+HIST). Chi tiết ở mục 9.1 của `research_context.md` |
 | 1.3 | Kiểm tra snapshot trên 100 instance | Chưa làm |
 | 1.5 | Tìm hiểu bài báo và khả năng lấy dữ liệu cho ISSUE | Xong, đã báo cáo |
-| 2 | Hoàn thiện v4 | Đang làm. Lượt v4-L7 (27/10/2026) đã chạy với RRF gốc. Xếp hạng node sau hop theo KGCompass (`graph-proc`, mục 6.16) đã cài ngày 28/10/2026 và đã chạy ở v4-L8. Còn việc sửa cách nối doc và chọn ngưỡng |
-| 3 | Chạy thêm 10 repo còn lại của tập test, như thêm dữ liệu cho cùng thực nghiệm (quyết định 58) | Code đã cài, chưa chạy |
-| 4 | Viết luận văn | Ngoài phạm vi đợt này |
+| 2 | Hoàn thiện pipeline v4 | Xong phần chính. RRF gốc chạy từ v4-L7. `graph-proc` chạy từ v4-L8. Việc sửa cách nối doc và chọn ngưỡng được lùi lại, vì chúng phụ thuộc vào kết quả của giai đoạn 4 |
+| 3 | Chạy thêm 10 repo còn lại của tập test, như thêm dữ liệu cho cùng thực nghiệm (quyết định 58) | Xong ở v4-L8 |
+| 4 | Đo vai trò ngữ nghĩa của các nguồn (mục 6.19): đưa HIST trở lại judge, viết prompt v7, soi lại nhãn, gán nhãn tay, dựng bảng theo vai trò | Đang làm. Judge v5 và v6 đã chạy. Lần soi nhãn v6 đã xong |
+| 5 | Kiểm chứng bằng agent (câu S4) | Chưa làm |
+| 6 | Lấp lỗ hổng trước khi viết: việc 1.3, kiểm định theo snapshot, bài chưa đọc, mâu thuẫn giữa các tài liệu | Chưa làm |
+| 7 | Viết luận văn | Chưa làm |
 
 ---
 
@@ -162,6 +201,8 @@ Cell `verify-v4` trình bày kết quả theo đúng cách ở mục 6.8.
 
 ### 6.1 Các hệ thống so sánh
 
+> Cập nhật 04/11/2026. Các hệ thống ở mục này thuộc tầng vị trí. Vai trò ngữ nghĩa của DOC, HIST và ISSUE được đo ở mục 6.19.
+
 | Hệ thống | Nguồn dùng | Vai trò |
 |---|---|---|
 | AST | Code | Mốc so sánh |
@@ -187,7 +228,7 @@ Ba hệ thống bỏ bớt một nguồn chỉ tốn bước trộn, và không 
 | Q6 | +ALL so với ALL−HIST | HIST còn thêm giá trị khi đã có DOC và ISSUE hay không |
 | Q7 | +ALL so với ALL−ISSUE | ISSUE còn thêm giá trị khi đã có DOC và HIST hay không |
 
-Q4 là câu hỏi chính của đề tài.
+Trước ngày 04/11/2026, Q4 được coi là câu hỏi chính của đề tài. Từ ngày đó, Q1 đến Q7 là câu hỏi của tầng vị trí. Câu hỏi chính của đề tài nằm ở mục 1.
 
 Độ đo, cách trình bày số liệu và kiểm định nằm ở mục 6.8. Độ đo gồm Top@1, Top@5, Top@10, MRR, MAP và Acc@10, cùng nDCG@10 theo judge. Mỗi câu hỏi có một bảng thay đổi theo từng instance và một kiểm định McNemar cho Top@10. Các bảng của từng nguồn được đặt cạnh nhau.
 
@@ -292,6 +333,8 @@ DOC dùng cạnh Documents hiện tại. Việc sửa cách nối doc với code
 
 ### 6.7 Judge v4
 
+> Cập nhật 04/11/2026. Judge là phép đo vai trò ngữ nghĩa của các nguồn, không chỉ là bước kiểm tra chất lượng bằng chứng (mục 1 và 6.19). Prompt hiện tại là v6 (mục 6.19.4).
+>
 > Cập nhật 21/10/2026: số bằng chứng được chấm, trường loại thông tin và request đủ thông tin được chốt lại ở mục 6.12.
 >
 > Cập nhật 22/10/2026: phần bằng chứng đã cài và đã chạy (lượt v4-L4). Bằng chứng HIST lấy từ `hist_cand`, tức 10 hunk có NL + α·CE cao nhất, thay cho `hist_locus_best`. Hunk của commit sửa hơn 50 hàm/lớp bị bỏ khỏi `hist_cand`.
@@ -323,6 +366,8 @@ Khóa của mỗi nhãn có hash của input. Nhờ vậy nhãn cũ không bị 
 
 ### 6.8 Phân tích (`verify-v4`)
 
+> Cập nhật 04/11/2026. Từ ngày 03/11/2026, `verify-v4` in thêm các phân tích J1 đến J6 của judge. Bảng theo vai trò nằm ở mục 6.19.8.
+>
 > Cập nhật 21/10/2026: độ đo và kiểm định được chốt lại ở mục 6.12, thay cho phần tương ứng ở đây.
 
 Cell `verify-v4` trình bày số liệu cho các câu hỏi ở mục 6.2. Phần phụ trợ được giữ đơn giản, nên cell không tính khoảng tin cậy, TRisk hay hiệu chỉnh cho nhiều kiểm định.
@@ -369,6 +414,8 @@ Manifest ghi code và cấu hình của từng lượt, để biết kết quả
 Hash của cell lấy từ biến `In` của IPython. Ở lượt v4-L6, `In` rỗng, nên manifest ghi 0 cell. Ở lượt v4-L7, manifest ghi đủ 31 cell. Nguyên nhân của lượt v4-L6 chưa rõ, và manifest không báo lỗi khi `In` rỗng.
 
 ### 6.10 Sửa cách nối doc với code
+
+> Cập nhật 04/11/2026. Việc này được lùi lại. Cách nối doc chỉ ảnh hưởng tới danh sách hàm/lớp của DOC ở tầng vị trí, và tới pool DOC khi chunk mới vào tập tìm kiếm. Vai trò ngữ nghĩa của DOC được đo trước (mục 6.19). Mục này cần viết lại trước khi làm (mục 14.18).
 
 Theo quyết định 58, việc này không phải là điều kiện để chạy thêm repo. Khi cách nối doc đổi, mọi repo được chạy lại với cách nối mới.
 
@@ -440,7 +487,7 @@ Phần này ghi các quyết định của buổi thảo luận ngày 18/10/2026
 
 **Ngưỡng thay cho số lượng cố định.** Số lượng cố định hiện tại (5 chunk doc, 5 issue cũ, 10 hunk) sẽ được thay bằng ngưỡng. Ngưỡng có thể dùng ở ba chỗ: trước khi hop, trước khi vote và trước khi output. Lý do là số issue cũ liên quan thay đổi theo instance. Có instance có 5 đến 10 issue liên quan, có instance không có issue nào, và khi đó đưa đủ 5 issue không liên quan làm loãng context. Điểm embedding và điểm TF-IDF là cosine, có thang cố định, nên đặt được ngưỡng tuyệt đối. BM25 và RRF không có thang cố định. Cách chọn ngưỡng chưa chốt, và sẽ được chọn từ bài báo hoặc kỹ thuật liên quan.
 
-**Khung so sánh.** Giữ toàn bộ khung so sánh với AST, gồm các mức hop và các cách kết hợp nguồn. Câu hỏi giữ nguyên Q1 đến Q7 ở mục 6.2.
+**Khung so sánh.** Giữ toàn bộ khung so sánh với AST, gồm các mức hop và các cách kết hợp nguồn. Câu hỏi giữ nguyên Q1 đến Q7 ở mục 6.2. Từ ngày 04/11/2026, khung này là tầng vị trí của đề tài (mục 1).
 
 **Judge bằng chứng có thêm loại thông tin.** Ngoài điểm liên quan và điểm hữu ích, judge ghi loại thông tin mà phần tử cung cấp. Danh sách loại chưa chốt.
 
@@ -452,7 +499,7 @@ Mục này thay cho phần độ đo và kiểm định ở mục 6.7 và 6.8 kh
 
 **Bảng 3, phần bằng chứng, mỗi loại một bảng.** Pool là hợp của 10 phần tử đầu mỗi loại qua mọi hệ thống, judge chấm một lần. Phần tử hữu ích khi điểm hữu ích từ 2. Mỗi cách lọc (hạn ngạch cố định, các ngưỡng) có một hàng: Precision, Recall, F1, tỷ lệ trả rỗng đúng, tỷ lệ trả rỗng sai, số token trung bình.
 
-**Bảng 4, loại thông tin.** Nguồn × loại thông tin: tỷ lệ phần tử hữu ích có từng loại. Danh sách loại ở mục 13.3 của `research_context.md`.
+**Bảng 4, loại thông tin.** Nguồn × loại thông tin: tỷ lệ phần tử hữu ích có từng loại. Danh sách loại ở mục 13.3 của `research_context.md`. Từ ngày 04/11/2026, đây là bảng chính của tầng ngữ nghĩa (mục 6.19.8).
 
 **Bảng 5, đủ thông tin cho cả tập.** Chỉ cho Q4: tỷ lệ instance được judge chấm "đủ" ở AST và ở +ALL, kèm McNemar.
 
@@ -744,6 +791,8 @@ Kết quả ở máy không trùng hẳn lượt v4-L8 trên cùng instance. `as
 
 #### 6.18.6 Gán nhãn tay và tiêu chí, đặt trước khi chạy
 
+> Cập nhật 04/11/2026. Lượt đầy đủ của v5 và v6 đã chạy trước khi có nhãn tay, nên tiêu chí 1 và 2 chưa được kiểm tra. Kế hoạch nhãn tay mới nằm ở mục 6.19.7.
+
 - 150 phần tử lấy từ pool của điều kiện C, 50 mỗi nguồn, mỗi instance tối đa 1 phần tử mỗi nguồn. Người gán nhãn dùng thang v5 và không thấy nhãn của judge. Lượt thử ở máy (mục 6.18.5) có 48 instance có gold, nên mỗi nguồn có tối đa 48 phần tử, tức 144 phần tử.
 - Prompt v5 được dùng cho lượt đầy đủ khi đạt cả ba điều kiện:
   1. κ trọng số của điểm hữu ích giữa người và điều kiện C từ 0,6 trở lên;
@@ -783,6 +832,8 @@ Cập nhật 29/10/2026. Lượt thử chạy ở máy, nên ba dòng "Thử" c�
 
 #### 6.18.8 Thứ tự
 
+> Cập nhật 04/11/2026. Thứ tự mới nằm ở mục 6.19.9.
+
 1. Phần xếp hạng ngoài notebook trên file hiện có (mục 6.18.4, đoạn cuối).
 2. Cài `hist-msg`, prompt v5 và định dạng phần tử v5 vào notebook. Thử trên 12 instance ở `D:\tmp\rgdata` với client Gemini giả.
 3. Lượt thử ở máy (mục 6.18.5): điều kiện B và C trên 48 instance, gọi Gemini thật. Đã chạy ngày 29/10/2026.
@@ -797,7 +848,146 @@ Cập nhật 29/10/2026. Lượt thử chạy ở máy, nên ba dòng "Thử" c�
 - Pool ISSUE giữ điều kiện Fix(b′) khác rỗng, để giới hạn số thay đổi trong lượt này.
 - HIST và ISSUE giữ riêng hai nguồn. Tỷ lệ báo cáo xuất hiện ở cả hai pool được báo cáo.
 
-**Trạng thái.** Đã viết kế hoạch ngày 29/10/2026. Bước 1 và bước 2 của mục 6.18.8 đã làm cùng ngày. Bước 1 đã chạy ngoài notebook trên file kết quả của lượt v4-L8, và chưa được ghi vào `experiment_log.md`. Ở bước 2, `hist-msg`, prompt v5, định dạng phần tử v5 và độ đo bằng chứng mới đã được cài vào notebook, rồi chạy thử trên 12 instance ở `D:\tmp\rgdata` với client Gemini giả. `JUDGE_PILOT_N` cũng được cài, rồi bị bỏ cùng ngày. Thiết kế khi cài nằm ở mục 6b, 9 và 10 của `pipeline_design.md`. Bước 3 đã chạy ở máy cùng ngày (mục 6.18.5). Bước 4 trở đi chưa làm.
+**Trạng thái.** Đã viết kế hoạch ngày 29/10/2026. Bước 1 và bước 2 của mục 6.18.8 đã làm cùng ngày. Bước 1 đã chạy ngoài notebook trên file kết quả của lượt v4-L8, và chưa được ghi vào `experiment_log.md`. Ở bước 2, `hist-msg`, prompt v5, định dạng phần tử v5 và độ đo bằng chứng mới đã được cài vào notebook, rồi chạy thử trên 12 instance ở `D:\tmp\rgdata` với client Gemini giả. `JUDGE_PILOT_N` cũng được cài, rồi bị bỏ cùng ngày. Thiết kế khi cài nằm ở mục 6b, 9 và 10 của `pipeline_design.md`. Bước 3 đã chạy ở máy cùng ngày (mục 6.18.5). Bước 4 (nhãn tay) chưa làm. Bước 5 đã được chạy trên Kaggle mà chưa có nhãn tay (lượt v4-L9). Bước 6 đã có một phần trong notebook từ ngày 03/11/2026, với judge v6.
+
+### 6.19 Định hướng vai trò ngữ nghĩa của các nguồn (04/11/2026)
+
+#### 6.19.1 Lý do đổi hướng
+
+Các phân tích hướng đi trước đây dùng Top@k theo gold làm thước đo chung cho mọi nguồn. Cách đó sai với DOC và ISSUE. Gold chỉ đo việc tìm vị trí code. Giá trị của DOC và ISSUE nằm ở thông tin mà code không cho, và judge tồn tại để đo phần này. Kết quả judge là phép đo bước đầu cho vai trò ngữ nghĩa của các nguồn, nên không được bỏ qua khi đánh giá đề tài.
+
+Từ ngày này:
+- Mục tiêu và câu hỏi nghiên cứu theo mục 1.
+- Gold đo tầng vị trí. Judge đo tầng ngữ nghĩa.
+- Loại thông tin là thước đo chính của vai trò ngữ nghĩa. Điểm hữu ích cho biết phần tử nào được tính.
+
+#### 6.19.2 Vai trò dự kiến của từng nguồn
+
+| Nguồn | Vai trò dự kiến | Loại thông tin tương ứng |
+|---|---|---|
+| DOC | Chương trình phải làm gì, API dùng thế nào | `expected_behavior`, `api_usage` |
+| HIST | Code đã đổi ra sao và vì sao | `past_change`, `design_rationale` |
+| ISSUE | Lỗi nào đã xảy ra và vì sao | `similar_failure`, `bug_cause` |
+
+Bảng này là giả thuyết của đề tài. Mục 6.19.3 cho thấy kết quả hiện có đi cùng hướng với giả thuyết. Kết luận chính thức chờ nhãn đã xác nhận.
+
+#### 6.19.3 Kết quả hiện có theo vai trò
+
+Tỷ lệ (%) phần tử hữu ích có từng loại thông tin. Một phần tử có thể có nhiều loại. HIST chỉ có ở judge v5.
+
+| Loại | DOC v5 | DOC v6 | ISSUE v5 | ISSUE v6 | HIST v5 |
+|---|---|---|---|---|---|
+| `expected_behavior` | 29,3 | 48,6 | 12,9 | 30,9 | 7,0 |
+| `api_usage` | 64,6 | 53,5 | 13,0 | 14,1 | 16,2 |
+| `similar_failure` | 9,5 | 2,3 | 70,3 | 27,7 | 44,8 |
+| `bug_cause` | 2,8 | 8,0 | 18,3 | 48,1 | 19,0 |
+| `code_location` | 17,2 | 36,5 | 30,4 | 54,5 | 39,8 |
+| `design_rationale` | 16,2 | 11,9 | 14,1 | 14,8 | 28,9 |
+| `past_change` | 8,3 | 4,6 | 9,4 | 8,5 | 45,3 |
+
+- Tỷ lệ instance có ít nhất một phần tử hữu ích ở v6 là 44,6% (DOC) và 62,9% (ISSUE). Ở v5, tỷ lệ là 47,6% (DOC), 68,3% (ISSUE) và 76,3% (HIST).
+- Phần tử hữu ích không nối tới gold chiếm 83% ở DOC và 75% ở ISSUE. Hai tỷ lệ này được tính từ bảng J3 của judge v6.
+- Trên 2.214 instance, chỉ DOC có phần tử hữu ích ở 12,6%, chỉ ISSUE có ở 31,1%, và cả hai cùng có ở 31,7%. Ở nhóm AST trượt top 10, ba tỷ lệ này là 13,6%, 33,2% và 25,4%.
+- Tỷ lệ pool DOC có phần tử hữu ích tăng theo độ phủ doc của repo, ví dụ 2,9% ở pylint và 65,5% ở django. Khi gold có cạnh `Documents`, tỷ lệ là 59,5%. Khi không có, tỷ lệ là 38,9%.
+
+Theo lần soi nhãn ở mục 6.19.5, các tỷ lệ của v6 có lẽ cao hơn thực tế.
+
+#### 6.19.4 Prompt v6 và lượt ngày 03/11/2026
+
+Prompt v6 đã cài trong cell `judge-v4` và chạy trên Kaggle ngày 03/11/2026. So với v5, prompt có các thay đổi sau.
+1. Judge chấm điểm liên quan trước, rồi tới loại thông tin và điểm hữu ích.
+2. Có quy tắc cứng: điểm hữu ích không lớn hơn điểm liên quan.
+3. Issue bị cắt ở 8.000 ký tự, bản vá ở 10.000 ký tự, và mỗi phần tử ở 4.000 ký tự.
+4. Định nghĩa `api_usage` và `similar_failure` được viết chặt hơn.
+5. Prompt dặn không thưởng cho độ dài, và giữ cùng độ khắt khe từ phần tử đầu tới phần tử cuối.
+6. Judge chỉ chấm DOC và ISSUE. HIST bị bỏ khỏi judge.
+
+`verify-v4` áp lại hai quy tắc khi đọc nhãn, và in thêm các phân tích J1 đến J6. Cả 4.663 request đều có nhãn. Bảng xếp hạng giống lượt v4-L9.
+
+So với v5 trên cùng pool:
+- Tỷ lệ phần tử hữu ích giảm từ 8,7% xuống 7,9% ở DOC, và từ 13,7% xuống 10,5% ở ISSUE.
+- κ trọng số của điểm hữu ích khi chấm lặp giảm từ 0,785 xuống 0,652 ở DOC, và từ 0,715 xuống 0,691 ở ISSUE.
+- Nhãn `no_new_information` tăng từ 6,6% lên 21,8% ở DOC. Nhãn `code_location` trên mọi phần tử tăng từ 6,9% lên 26,5% ở DOC, và từ 10,4% lên 46,4% ở ISSUE.
+- Tỷ lệ được chấm hữu ích tăng theo vị trí trong prompt, dù thứ tự đã được xáo. Ở DOC, tỷ lệ là 5,1% ở vị trí 1 và 10,8% ở vị trí 8. Ở ISSUE, tỷ lệ là 6,7% và 13,2%. Tỷ lệ nối tới gold gần như phẳng theo vị trí.
+
+#### 6.19.5 Soi nhãn v6
+
+**Cách làm.** Mẫu gồm 50 instance chọn ngẫu nhiên (seed 20261103), với 995 nhãn: 495 nhãn DOC và 500 nhãn ISSUE. Agent đọc issue, bản vá, từng phần tử và nhãn của Gemini, ghi mức điểm hợp với tiêu chí v6, rồi ghi kiểu lỗi. Script và kết quả nằm ngoài repo.
+
+**Kết quả.**
+
+| Điểm Gemini cho | Số nhãn | Đúng |
+|---|---|---|
+| 0 | 570 | 95,3% |
+| 1 | 321 | 54,2% |
+| 2 | 89 | 29,2% |
+| 3 | 15 | 13,3% |
+
+- Điểm hữu ích sai ở 250 nhãn (25,1%). Trong đó 218 nhãn bị cho cao, và 32 nhãn bị cho thấp.
+- Gemini cho 104 nhãn từ 2 điểm, và 36 nhãn trong số đó đúng (34,6%). Tỷ lệ đúng là 47,4% ở DOC và 27,3% ở ISSUE.
+- Có 41 phần tử đáng từ 2 điểm, và Gemini tìm ra 36 phần tử (87,8%).
+- Xét theo instance, Gemini cho rằng 43 trên 50 instance có phần tử hữu ích. Theo mức hợp, con số là 21 trên 50.
+
+**Ba câu hỏi đã kiểm tra.**
+- Chấm sai: có, chủ yếu theo chiều cao.
+- Thiên vị độ dài: không thấy ở ngưỡng hữu ích. Ở ISSUE, nhóm dài nhất bị cho cao hơn mức hợp ở 41,6% nhãn, và nhóm ngắn nhất ở 24,8%, nhưng xu hướng không đều.
+- Lỗi logic: gần như không còn. Chỉ 2 nhãn mâu thuẫn với quy tắc.
+
+**Các lỗi phổ biến.**
+1. `code_location` bị dùng thay cho "bối cảnh chung". Có 296 nhãn chỉ mang loại này và được 1 điểm, và 139 nhãn trong số đó đáng 0 điểm.
+2. `no_new_information` bị dùng sai ở 156 trên 158 nhãn, vì phần tử không lặp lại issue.
+3. Điểm từ 2 bị cho vì trùng từ khóa hoặc cùng khu vực, ở 68 nhãn.
+4. `similar_failure` chỉ đúng ở 2 trên 25 nhãn hữu ích có loại này, vì Gemini không so nguyên nhân gốc.
+5. Điểm 3 chỉ đúng ở 2 trên 15 nhãn.
+6. Ở DOC, phần tử nằm cuối prompt được chấm dễ hơn. Tỷ lệ phần tử không đáng hữu ích mà được từ 2 điểm là 2,1% ở vị trí 1 tới 3, và 6,4% ở vị trí 8 tới 10. Mẫu không thấy xu hướng này ở ISSUE.
+
+**Nguyên nhân của lỗi 1 và 2 có vẻ nằm ở prompt v6.** Trong 454 nhãn có điểm liên quan 1, có 437 nhãn rơi vào đúng hai lựa chọn: `code_location` với 1 điểm, hoặc `no_new_information` với 0 điểm. Prompt v6 chỉ cho dùng `unrelated` khi điểm liên quan là 0, và không có loại nào cho "bối cảnh chung". Định nghĩa điểm 1 lại có cụm "or only identifies code_location".
+
+**Giới hạn.** Agent là LLM, không phải người. Agent thấy nhãn của Gemini khi soi, nên có thể bị ảnh hưởng. Mẫu chỉ có 50 instance.
+
+#### 6.19.6 Thiết kế prompt v7
+
+Mục tiêu chính của v7 là loại thông tin đúng, vì đây là thước đo vai trò ngữ nghĩa.
+
+1. **Đưa HIST trở lại judge.** Nếu không, đề tài không đo được vai trò ngữ nghĩa của HIST. Phần tử HIST gồm message, ticket hoặc PR liên kết, và diff của commit, cắt theo trần 4.000 ký tự. Diff được giữ theo quy tắc ở mục 12: commit luôn được xem cùng diff. Điều này khác định dạng phần tử của v5 (mục 6.18.2). HAFix thấy diff thô thường làm kết quả của LLM kém hơn, nên phần này cần được so trong lượt thử.
+2. **Thêm lựa chọn cho bối cảnh chung.** Thêm loại `general_background` cho phần tử cùng khu vực nhưng không nói về tình huống của issue. Bỏ cụm "or only identifies code_location" khỏi định nghĩa điểm 1.
+3. **Viết chặt `code_location` và `no_new_information`.** `code_location` chỉ dùng khi phần tử chỉ ra đúng code gây lỗi của issue này. `no_new_information` chỉ dùng khi phần tử nhắc lại nội dung của chính issue, kèm một ví dụ.
+4. **Bắt nêu căn cứ trước khi cho từ 2 điểm.** Thêm một trường ngắn, trích câu trong phần tử áp dụng cho đúng tình huống của issue. Nếu không trích được thì điểm tối đa là 1. Cách viết căn cứ trước khi chấm theo G-Eval. Số token đầu ra sẽ tăng.
+5. **Bắt so nguyên nhân gốc với bản vá.** Với `similar_failure` và điểm 3, judge nêu nguyên nhân trong phần tử rồi so với nguyên nhân mà bản vá sửa. Nếu khác thì không được gắn loại này, và không được cho 3 điểm.
+6. **Xử lý thiên vị vị trí.** Bỏ câu "in strict order from 1 to N", rồi đo lại theo vị trí trong prompt. Nếu vẫn lệch, chấm mỗi pool hai lần với thứ tự xuôi và ngược, theo Wang và cộng sự (2023) và Zheng và cộng sự (NeurIPS 2023). Cách này làm tăng gấp đôi chi phí.
+
+Prompt v7 được thử ở máy trên đúng 50 instance đã soi, bằng `GOOGLE_API_KEY` của notebook, trước khi chạy đầy đủ. Nhãn v7 của mẫu này được soi lại theo cùng cách ở mục 6.19.5.
+
+#### 6.19.7 Gán nhãn tay
+
+Nhãn tay được làm sau khi có prompt v7, để so đúng phiên bản cuối. Mẫu gồm 150 phần tử, 50 mỗi nguồn, mỗi instance tối đa 1 phần tử mỗi nguồn. Người gán nhãn không thấy nhãn của judge. Mỗi phần tử có điểm hữu ích, điểm liên quan và loại thông tin. Từ đó tính κ trọng số của điểm hữu ích, và κ theo từng loại thông tin. Ước tính mất 4 đến 6 giờ của người dùng.
+
+#### 6.19.8 Bảng kết quả theo vai trò
+
+1. S1: nguồn × loại thông tin, trên phần tử hữu ích và trên mọi phần tử, kèm số phần tử trên mỗi instance.
+2. S2: mức khác nhau giữa các nguồn, và theo từng loại thông tin, tỷ lệ instance mà chỉ một nguồn cung cấp loại đó. Phần báo cáo trùng giữa HIST và ISSUE được báo riêng.
+3. S3: bảng ở mục 1 tách theo độ phủ doc, độ khó của AST và việc issue có nêu tên gold.
+4. Độ tin cậy: κ khi chấm lặp theo từng loại, κ giữa judge và người, kết quả soi nhãn.
+
+#### 6.19.9 Tiêu chí và thứ tự
+
+**Tiêu chí, đặt trước khi chạy v7.**
+- κ trọng số của điểm hữu ích giữa judge và người từ 0,6 trở lên, như tiêu chí ở mục 6.18.6.
+- κ giữa judge và người từ 0,6 trở lên ở các loại thông tin dùng để kết luận về vai trò. Loại không đạt chỉ được báo là mô tả.
+- Kết luận về vai trò của một nguồn chỉ dùng những loại đạt tiêu chí trên.
+- Ở tầng vị trí, +HIST (Locus) tốt hơn AST có ý nghĩa sau Holm. Tiêu chí này đã đạt ở v4-L8.
+
+Nếu không đạt, đề tài báo đúng mức đã đo được, và ghi judge nhỏ là giới hạn của phép đo.
+
+**Thứ tự.**
+1. Viết prompt v7, đưa HIST trở lại judge, thử trên 50 instance ở máy, rồi soi lại nhãn.
+2. Chạy lượt đầy đủ trên Kaggle.
+3. Gán nhãn tay, rồi tính κ.
+4. Dựng bảng theo vai trò (mục 6.19.8).
+5. Đặt cơ sở cho danh sách loại thông tin từ các bài về nhu cầu thông tin của lập trình viên (mục 13).
+6. Ở tầng vị trí, đưa HIST theo Locus về làm danh sách chính của các hệ thống. Việc này chưa đổi trong notebook.
+7. Kiểm chứng bằng agent cho câu S4: so cùng một agent khi có và không có bằng chứng, trên một mẫu nhỏ. Cách đánh giá truy hồi qua kết quả của LLM phía sau theo Salemi và Zamani (SIGIR 2024). LLM ở đây chỉ dùng để kiểm chứng, không dùng để xếp hạng.
+8. Lấp lỗ hổng trước khi viết: việc 1.3, kiểm định có xét việc instance dùng chung snapshot, các bài đang dẫn thứ cấp, và các mâu thuẫn ở mục 8 của `theoretical_foundation.md`.
 
 ---
 
@@ -811,16 +1001,17 @@ Mọi cell của v4 nằm trong phần v4 ở cuối notebook. Từ ngày 27/10/
 | Cell | Việc | Ghi vào |
 |---|---|---|
 | `v4-md` | Mô tả phần v4 | |
+| `drop-broken` | Đọc thử mọi file `.json` và `.jsonl` mà notebook ghi trong `WORK_DIR`, và xóa file không đọc được. Cell nằm sau `clear-index-cache`. Cell tạo ra file đó sẽ tạo lại nó | |
 | `v4-config` | Đường dẫn, tham số, `GITHUB_TOKEN`, cờ chạy | |
 | `v4-run` | Truy hồi lại với oracle mới, xếp hạng tới 500 | `scale_rows_v4.jsonl` |
-| `snapshot-audit` | Kiểm tra snapshot trên 100 instance | `V4_DIR/snapshot_audit.json` |
+| `snapshot-audit` | Kiểm tra snapshot trên 100 instance. Chưa cài vào notebook | `V4_DIR/snapshot_audit.json` |
 | `issue-fetch` | Tải ticket Trac và issue/PR GitHub | `V4_DIR/issues/` |
 | `issue-index` | Liên kết, lọc, TF-IDF, SimiScore | Thêm cột ISSUE vào `scale_rows_v4.jsonl` |
 | `hist-proc` | Dựng chỉ mục hunk, rồi xếp hạng hàm/lớp theo Locus (mục 6.4). Từ ngày 29/10/2026 là hệ thống phụ "+HIST (Locus)" | `history/<repo>_hunks_v2.jsonl`, thêm cột HIST theo Locus vào `scale_rows_v4.jsonl` |
 | `hist-msg` | Xếp hạng commit theo phần lời và theo liên kết với AST, rồi xếp hạng hàm/lớp (mục 6.18.3). Nằm sau `issue-index`. Từ ngày 29/10/2026 là nguồn HIST chính | Thêm `doc_ids_hist_msg` và `hist_msg_cand` vào `scale_rows_v4.jsonl` |
-| `v4-fusion` | Trộn các nguồn với AST cho 8 hệ thống và 3 biến thể. Cách trộn là RRF gốc (mục 6.6) | `V4_DIR/fusion.json` |
-| `judge-v4` | Tạo request bằng chứng, gửi batch, đọc nhãn. Từ ngày 26/10/2026 không còn `#code2`. Từ ngày 29/10/2026 dùng prompt v5 và có `JUDGE_PILOT_N` (mục 6.18) | `judge_v4/` |
-| `verify-v4` | Q1 đến Q7 và các bảng phân tích | Output của cell |
+| `v4-fusion` | Trộn các nguồn với AST cho 14 hệ thống. Cách trộn là RRF gốc (mục 6.6) | `V4_DIR/fusion.json` |
+| `judge-v4` | Tạo request bằng chứng, gửi batch, đọc nhãn. Từ ngày 26/10/2026 không còn `#code2`. Từ ngày 03/11/2026 dùng prompt v6 và chỉ chấm DOC và ISSUE (mục 6.19.4) | `judge_v4/` |
+| `verify-v4` | Q1 đến Q7, các bảng phân tích, Bảng 3, Bảng 4, độ ổn định của judge, và J1 đến J6 | Output của cell |
 | `depth-v4` | Số node phải đọc và độ sâu tới gold, không dùng LLM | Output của cell |
 | `manifest` | Ghi cấu hình, hash của mã từng cell và hash của dữ liệu. Đã cài ngày 26/10/2026. Từ ngày 27/10/2026, khóa của cell là số thứ tự trong `In` cộng dòng đầu | `V4_DIR/manifest.json` |
 
@@ -852,17 +1043,13 @@ Sau khi harness chạy đạt, tôi áp các cell vào `colab/build_graph_flask_
 
 ## 9. Chạy trên Kaggle
 
-Bạn là người chạy trên Kaggle. Kaggle giới hạn 12 giờ mỗi lần chạy. Vì vậy tôi đề xuất ba lượt. File trong `/kaggle/working` vẫn còn khi mở phiên mới, nên lượt sau dùng lại được kết quả của lượt trước (`experiment_log.md`, các lượt ngày 27/10 và 28/10).
+Bạn là người chạy trên Kaggle. Một lượt Kaggle chỉ gồm việc tải notebook lên và bấm Run All. Không có bước thao tác nào khác trên giao diện Kaggle.
 
-| Lượt | Cell | Điểm dừng |
-|---|---|---|
-| 1 | `v4-config`, `hist-build`, `v4-run`, `hist-proc`. Thêm `issue-fetch` và `issue-index` khi nguồn ISSUE được làm tiếp | Kết luận hẹp của việc 1.2 không đổi chiều |
-| 2 | `snapshot-audit` | Kết quả quyết định cách làm của các lượt chạy sau |
-| 3 | `v4-fusion`, `judge-v4`, `verify-v4`, `manifest` | Bạn xem kết quả Q1 đến Q7 |
+Kaggle giới hạn 12 giờ mỗi lần chạy. File trong `/kaggle/working` vẫn còn khi mở phiên mới. Vì vậy mỗi lượt dùng lại graph, history, hunk, báo cáo issue, dòng kết quả và nhãn judge đã có (`experiment_log.md`, các lượt ngày 27/10 và 28/10). Cell `drop-broken` xóa file bị cụt, và cell tạo ra file đó sẽ tạo lại nó.
 
-Cell `hist-proc` dựng chỉ mục hunk một lần, mất khoảng 45 phút đến 1 giờ. Chỉ mục được ghi vào `history/`, nên lượt sau dùng lại được nếu file được lưu.
+Mỗi khi prompt đổi, khóa của mọi request đổi, nên judge chấm lại toàn bộ. Lượt ngày 03/11/2026 mất khoảng 1,5 giờ, phần lớn là `judge-v4`.
 
-Nhãn của `judge_v3` nằm trong `/kaggle/working`, và thư mục này vẫn còn khi mở phiên mới. Vì vậy lượt 3 không phải nạp lại nhãn này từ dataset. Từ ngày 26/10/2026, judge không chấm node code nữa, nên lượt 3 cũng không cần nhãn này.
+Sau lượt chạy, các file cần cho phân tích ngoài notebook nằm ở `judge_v4/` (`requests.jsonl`, `pool.jsonl`, `labels_<model>.jsonl`) và `v4/scale_rows_v4.jsonl`.
 
 ---
 
@@ -876,6 +1063,7 @@ Các con số dưới đây là ước tính. Chúng sẽ được đo lại khi
 | `hist-proc` | Dựng chỉ mục hunk khoảng 45 phút đến 1 giờ trên Kaggle, chỉ một lần. Không gọi LLM |
 | Judge `#code2` | Bỏ từ ngày 26/10/2026 |
 | Judge, số đo của lượt v4-L5 | 49,2 triệu token đầu vào, 3,8 triệu token đầu ra, 1,9 triệu token thinking, khoảng 10,4 USD theo giá batch |
+| Judge, số đo của lượt ngày 03/11/2026 (v6, DOC và ISSUE) | 4.663 request, 30,8 triệu token đầu vào, 2,0 triệu token đầu ra, khoảng 71 phút |
 | `issue-fetch` | Django khoảng 1 phút. SymPy vài phút khi có token |
 
 Batch API rẻ hơn gọi thường 50%. Tier 1 giới hạn 10 triệu token đang xếp hàng, nên mỗi batch chỉ gồm request của 150 instance, như `JUDGE_BATCH_INSTANCES` của v3. Từ ngày 26/10/2026, mỗi batch gồm request của 100 instance.
@@ -887,7 +1075,10 @@ Batch API rẻ hơn gọi thường 50%. Tier 1 giới hạn 10 triệu token đ
 | Rủi ro | Cách xử lý |
 |---|---|
 | SymPy chỉ có khoảng 57,5% PR ghi số issue, nên ISSUE yếu hơn ở SymPy | Báo độ phủ liên kết riêng cho từng repo trong `verify-v4` |
-| ISSUE và HIST dùng chung commit, nên hai nguồn có thể trùng thông tin | Q6 và Q7 đo phần đóng góp riêng của từng nguồn |
+| ISSUE và HIST dùng chung commit, nên hai nguồn có thể trùng thông tin. Ở 88,2% instance, có báo cáo nằm ở cả pool HIST và pool ISSUE | Tầng ngữ nghĩa báo cáo riêng phần thông tin đến từ báo cáo trùng (mục 6.19.8). Q6 và Q7 đo phần đóng góp riêng ở tầng vị trí |
+| Judge nhỏ cho điểm quá cao và gắn sai loại thông tin, nên phép đo vai trò ngữ nghĩa bị lệch | Soi nhãn, sửa prompt (mục 6.19.6), rồi xác nhận bằng nhãn người (mục 6.19.7) |
+| Phân bố loại thông tin phụ thuộc vào cách viết prompt. Từ v5 sang v6, `similar_failure` của ISSUE giảm từ 70,3% xuống 27,7% | Báo cáo kết quả của prompt đã xác nhận bằng nhãn người. Chỉ kết luận về những vai trò giữ nguyên qua các prompt |
+| Danh sách loại thông tin chưa có bài báo làm nền | Đọc các bài về nhu cầu thông tin của lập trình viên (mục 13), rồi đối chiếu danh sách loại với các bài đó |
 | Oracle vẫn dùng chung cho gold, HIST và ISSUE | Đã kiểm tra ở việc 1.1, và vẫn ghi là mối đe dọa trong luận văn |
 | Lượt chạy dừng giữa chừng (giới hạn 12 giờ) khi batch judge chưa xong | Mỗi batch được ghi vào `batch_jobs.txt`, và nhãn được ghi vào `labels_<model>.jsonl`. Hai file này vẫn còn ở phiên sau, nên lần chạy sau dùng lại batch đã gửi và không gửi lại request đã có nhãn |
 | Thiết kế v4 dựa trên kết quả test của v3 | Không tham số nào được chọn trên dữ liệu (quyết định 57). Phương pháp đã chốt không đổi chỉ vì kết quả xấu |
@@ -902,7 +1093,7 @@ Batch API rẻ hơn gọi thường 50%. Tier 1 giới hạn 10 triệu token đ
 - Dòng `GOOGLE_API_KEY` giữ nguyên dạng biến thường. Không dùng biến môi trường, secret hay getpass. `GITHUB_TOKEN` cũng là biến thường.
 - Không commit hay push notebook khi nó còn API key. Không push `colab/notebook5f48a387d*.ipynb`. Không dùng Google Drive.
 - "Document" chỉ có nghĩa là DocChunk.
-- Judge phải chấm mọi phần tử được truy hồi với toàn văn, kể cả DocChunk.
+- Judge phải chấm mọi phần tử được truy hồi với toàn văn, kể cả DocChunk. Từ prompt v6, phần tử dài hơn 4.000 ký tự bị cắt. Lần soi nhãn không thấy nhãn nào sai vì bị cắt.
 - LLM chỉ là judge. Không nguồn nào dùng LLM để tạo xếp hạng.
 - Commit luôn được xem cùng diff. Message không kèm diff thì không đủ để đánh giá.
 
@@ -918,6 +1109,7 @@ Batch API rẻ hơn gọi thường 50%. Tier 1 giới hạn 10 triệu token đ
 - [GloBug, arXiv 2101.05862](https://arxiv.org/abs/2101.05862)
 - [IncBL, arXiv 2106.07413](https://arxiv.org/abs/2106.07413)
 - [AmaLgam: Version History, Similar Report, and Structure](https://www.researchgate.net/publication/261635117_Version_History_Similar_Report_and_Structure_Putting_Them_Together_for_Improved_Bug_Localization)
+- Các bài dùng cho tầng ngữ nghĩa, chưa đọc toàn văn: Ko, DeLine và Venolia (ICSE 2007), Sillito, Murphy và De Volder (FSE 2006), Bettenburg và cộng sự (FSE 2008) về nhu cầu thông tin của lập trình viên; Liu và cộng sự (G-Eval, EMNLP 2023), Wang và cộng sự (Large Language Models are not Fair Evaluators, 2023), Zheng và cộng sự (NeurIPS 2023) về judge; Salemi và Zamani (eRAG, SIGIR 2024) về đánh giá qua kết quả phía sau.
 - Các bài về history, fusion và judge (Locus, ROSE, Sisman và Kak, KGCompass, HAFix, HAFixAgent, HippoRAG, eRAG, Utility judgments) có chi tiết trong artifact [Tổng quan tài liệu RepoGraph](https://claude.ai/artifact/DSWQi3W5KrFzSFPLKynKcL).
 
 ---
@@ -1181,4 +1373,26 @@ Thay đổi này cần có trước lượt Kaggle 12 repo. Nếu lượt đó c
 | Đối chứng G2 "+ALL, AST hai lần" | Đã đo ngoài notebook | Top@1 20,6, Top@10 58,8, MRR 0,332, so với 21,1, 60,0 và 0,336 của +ALL+GRAPH. GRAPH và AST trùng trung vị 8 trên 10 node đầu |
 | Mục 6.10, sửa cách nối doc | Cần viết lại | Thay đổi 2 lỗi thời vì DOC dùng `doc_kgc`. Thay đổi 3 không đạt điều kiện: chunk ngắn chiếm 12,2% pool SymPy và có tỷ lệ hữu ích cao hơn |
 
-**Việc tiếp theo.** Theo thứ tự ở mục 6.18.8. Danh sách ở mục 14.15 và 14.16 giữ nguyên, trừ việc 2 (sửa cách nối doc), lùi sau lượt judge v5.
+**Việc tiếp theo.** Theo thứ tự ở mục 6.18.8. Danh sách ở mục 14.15 và 14.16 giữ nguyên, trừ việc 2 (sửa cách nối doc), lùi sau lượt judge v5. Từ ngày 04/11/2026, mục 14.19 thay cho đoạn này.
+
+### 14.19 Trạng thái ngày 04/11/2026
+
+Mục này thay cho phần "Việc tiếp theo" của các mục 14.12 đến 14.18.
+
+| Phần | Trạng thái | Ghi chú |
+|---|---|---|
+| Lượt v4-L9 (02/11/2026): judge v5, `hist-msg` | Đã chạy, đã ghi vào `experiment_log.md` | 7.006 trên 7.007 request có nhãn |
+| Lượt ngày 03/11/2026: judge v6, chỉ DOC và ISSUE | Đã chạy, chưa ghi vào `experiment_log.md` | 4.663 trên 4.663 request có nhãn. `verify-v4` in thêm J1 đến J6 |
+| `drop-broken` và `write_graph_json` ghi qua `.tmp` | Đã cài, đã chạy | Lượt ngày 03/11/2026 đọc thử 694 file và không xóa file nào |
+| Soi nhãn v6 (mục 6.19.5) | Đã xong | 995 nhãn của 50 instance. Kết quả chưa ghi vào `experiment_log.md` |
+| Prompt v7 (mục 6.19.6) | Chưa viết | |
+| HIST trong judge | Đang bị bỏ ở v6 | Cần đưa trở lại để đo vai trò ngữ nghĩa của HIST |
+| Nhãn tay (mục 6.19.7) | Chưa làm | Làm sau khi có prompt v7 |
+| HIST theo Locus làm danh sách chính | Chưa đổi | `v4-fusion` vẫn dùng `hist-msg` cho các hệ thống chính |
+| Kiểm chứng bằng agent | Chưa làm | Câu S4 |
+| Kiểm tra snapshot (việc 1.3) | Chưa làm | Chưa cài vào notebook |
+| Sửa cách nối doc (mục 6.10), chọn ngưỡng (bước G) | Lùi lại | Làm sau khi có kết quả của giai đoạn 4 |
+
+**Việc tiếp theo.** Theo thứ tự ở mục 6.19.9.
+
+**Các tài liệu khác chưa theo hướng mới.** `research_context.md`, `pipeline_design.md`, `thesis_knowledge.md` và `theoretical_foundation.md` vẫn ghi mục tiêu cũ hoặc mô tả judge v5.

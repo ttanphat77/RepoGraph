@@ -15,6 +15,7 @@ Cột "Đã đọc" ở mục 2 ghi mức đọc bài báo: **toàn văn**, **m�
 | `research_context.md` | Bối cảnh, dữ liệu, phương pháp, kết quả v2 đến v4, quyết định 1 đến 60, định hướng ngày 18/10 (mục 12) | Mới nhất |
 | `planning.md` | Lộ trình, thiết kế v4, thuật ngữ (mục 2), câu hỏi Q1 đến Q7, chi phí, rủi ro, quy tắc làm việc, trạng thái mục 14 (mục 14.12 đến 14.17) | Mới, có vài mục cũ chưa khớp quyết định mới |
 | `pipeline_design.md` | Từng kỹ thuật: input, tham số, output, cơ sở, trạng thái; bảng tham số (mục 12) | Cập nhật 28/10/2026. Chưa có ngưỡng |
+| `theoretical_foundation.md` | Hệ thống cơ sở lý thuyết theo 6 tầng của pipeline: công thức, bài báo cơ sở, mức đã đọc; thành phần chưa có cơ sở, mâu thuẫn giữa các file, lỗ hổng lập luận | Tạo ngày 03/11/2026 |
 | `experiment_log.md` | Nhật ký các lượt chạy: cấu hình, thời gian, kết quả, đánh giá, sự cố; độ lặp lại giữa các lượt | Tạo ngày 22/10/2026. Cập nhật 29/10/2026, tới lượt v4-L8 và phân tích chi tiết của judge |
 | Artifact "Tổng quan tài liệu RepoGraph" (https://claude.ai/artifact/DSWQi3W5KrFzSFPLKynKcL) | Báo cáo đọc 18 bài báo, bảng kết luận cho từng câu hỏi thiết kế | Cập nhật 14/10, thiếu các bài về ISSUE và RRF |
 | `colab/build_graph_flask_colab.ipynb` | Notebook chạy thực nghiệm trên Kaggle, 46 cell. Từ 27/10/2026 chỉ còn code của pipeline v4 | Chứa output lượt v4-L8, cùng `GOOGLE_API_KEY` và `GITHUB_TOKEN` thật. Không commit khi còn key |

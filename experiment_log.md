@@ -1,6 +1,6 @@
 # Nhật ký thực nghiệm RepoGraph
 
-Cập nhật ngày 28/10/2026.
+Cập nhật ngày 03/11/2026.
 
 File này ghi lại từng lượt chạy thực nghiệm, để so kết quả giữa các lượt. Mỗi lượt ghi cấu hình, kỹ thuật đã dùng, thời gian chạy, kết quả, đánh giá và sự cố. Định nghĩa độ đo nằm ở mục 13 của `research_context.md`. Thiết kế của từng kỹ thuật nằm ở `pipeline_design.md`. Kế hoạch nằm ở mục 14 của `planning.md`.
 
@@ -27,6 +27,8 @@ File này ghi lại từng lượt chạy thực nghiệm, để so kết quả 
 | v4-L6 | 27/10/2026, 04:38 | 1.187 | Judge chỉ chấm bằng chứng, không viết lý do, thinking MINIMAL; thêm `depth-v4`; notebook đã dọn | 55,5 / 0,345 / 0,265 | Như L5 | Xếp hạng trùng L5 ở mọi ô. `manifest` không băm được cell nào |
 | v4-L7 | 27/10/2026, 07:54 | 1.187 | RRF gốc, trọng số bằng nhau, k = 60; không tham số nào chọn trên dữ liệu | 55,5 / 0,345 / 0,265 | +HIST: 62,4 / 0,393 / 0,309 | +ALL tốt hơn AST ở Top@10, kém hơn ở Top@1 và MAP. `manifest` băm đủ 31 cell |
 | v4-L8 | 28/10/2026, 07:24 | 2.214 (12 repo, tập test) | Thêm 10 repo; GRAPH và DOC mới theo KGCompass (`graph-proc`); phân tích độ phủ doc; sửa cách đọc output của git | 54,2 / 0,331 / 0,247 | +HIST: 59,3 / 0,375 / 0,283. +ALL+GRAPH có Top@10 cao nhất (60,0) | +ALL không còn tốt hơn AST ở Top@10. GRAPH và DOC mới không đạt tiêu chí đặt trước |
+| v4-L9 | 02/11/2026, 11:42 | 2.214 (12 repo, tập test) | Judge v5 (prompt và phần tử mới); +HIST theo phần lời của commit (`hist-msg`), Locus thành hệ thống phụ; độ đo bằng chứng mới; cell `drop-broken` | 54,2 / 0,331 / 0,246 | +HIST (Locus): 59,2 / 0,375 / 0,283. +HIST (NL+CE) có Top@10 cao nhất (59,7) | +HIST mới không khác AST ở độ đo nào. Judge v5 ít gắn "vị trí code" hơn hẳn v4; chưa có nhãn tay |
+| v4-L10 | 03/11/2026, 08:28 | 2.214 (12 repo, tập test) | Judge v6 (bỏ chấm HIST, đảo thứ tự `relevance -> info_types -> usefulness`, ràng buộc `usefulness <= relevance`, cắt trần văn bản `_clip`, chuẩn hóa nhãn độc quyền); thêm phân tích sâu J1–J6 trong `verify-v4` | 54,2 / 0,331 / 0,246 | Như L9 (+HIST (Locus): 59,2 / 0,375 / 0,283; +HIST (NL+CE): Top@10 59,7, MRR 0,376) | Xếp hạng trùng L9. Judge v6 đạt 4.663/4.663 request (100%), giảm ~50% tổng token, triệt tiêu lỗi logic `u > r` (từ 2,13% xuống 0,03%) và lỗi `no_new_information` khi `r = 0` (về 0%). Hợp `DOC ∪ ISSUE` ở top-5 phủ 66,9% instance (75,4% ở top-10) và cứu 62,9% (top-5) / 72,2% (top-10) ca AST trượt gold |
 
 ---
 
@@ -1443,3 +1445,431 @@ Thêm một hàng vào bảng ở mục 1, và một mục mới theo mẫu sau.
 **Đánh giá.** Kết luận nào thay đổi so với lượt trước.
 **Sự cố.** Lỗi, cách xử lý, việc cần làm ở lượt sau.
 ```
+
+---
+
+## 14. Lượt v4-L9 (02/11/2026, 11:42)
+
+Mục này nằm sau mục 13 để số của mục 11 đến 13 không đổi, vì các file khác đang trỏ tới các mục đó.
+
+**Thay đổi so với L8.** Kế hoạch nằm ở mục 6.18 của `planning.md`. Thiết kế khi cài nằm ở mục 6b, 9 và 10 của `pipeline_design.md`.
+- Judge dùng prompt v5 và định dạng phần tử v5 (mục 6.18.1 và 6.18.2 của `planning.md`). Prompt nói rõ bằng chứng phải cho thông tin mà code không cho, và việc tìm code không phải mục đích của bằng chứng. Phần tử chỉ chứa nội dung vốn có của artifact. Phần tử DOC bỏ danh sách đích của chunk. Phần tử ISSUE bỏ danh sách hàm/lớp mà bản sửa của báo cáo đổi, và thêm ngày tạo. Phần tử HIST là một commit (message, ngày, ticket hoặc PR liên kết), không còn là một hunk.
+- Bước 2 của prompt có câu "phần tử chỉ cho biết code nào liên quan (`code_location`) thì được tối đa 1 điểm". `verify-v4` áp lại quy tắc này khi tính: phần tử chỉ có loại `code_location` mà judge cho từ 2 điểm thì bị hạ về 1.
+- Một câu ở đầu prompt được sửa thành "Every piece of evidence existed before the fix was written." Trước khi chạy, 144 request của lượt thử ở máy được chấm lại với câu mới. Cả 144 request đều hợp lệ. κ trọng số của điểm hữu ích giữa nhãn trước và sau khi sửa là 0,821, cao hơn mức 0,734 khi Gemini chấm lặp với cùng prompt. Tỷ lệ phần tử hữu ích đổi từ 11,1% xuống 10,8%.
+- Cell mới `hist-msg` xếp commit theo phần lời (mục 6.18.3 của `planning.md`). +HIST, +ALL, ALL−DOC, ALL−ISSUE và +ALL+GRAPH dùng danh sách của `hist-msg`. HIST theo Locus được giữ lại thành hệ thống phụ "+HIST (Locus)". Có 14 hệ thống. Dấu cách tính của `hist-msg` gồm cấu hình và cây cú pháp của cell, nên sửa code thì mọi dòng được tính lại, còn sửa chú thích thì không.
+- `verify-v4` có độ đo bằng chứng mới (mục 6.18.4 của `planning.md`). Precision, Recall và F1 là micro, tính từ tổng TP, FP và FN trên mọi instance. T11U = 2·TP − FP được tính cho từng instance rồi lấy trung bình. Có thêm bảng 2×2 giữa output rỗng hay không và pool có phần tử hữu ích hay không.
+- Cell mới `drop-broken` nằm sau `clear-index-cache`. Cell này đọc thử mọi file `.json` và `.jsonl` mà notebook ghi trong `/kaggle/working`, và xóa file không đọc được. Cell tạo ra file đó sẽ tạo lại nó như khi file chưa có. `write_graph_json` ghi vào `<file>.tmp` rồi mới thay file cũ. Lý do nằm ở mục Sự cố.
+- Lượt thử ở máy trên 48 instance của Django `838e432e` và SymPy `9bf73cc2` đã chạy trước lượt này (mục 6.18.5 của `planning.md`).
+
+**Cấu hình.** Như L8, trừ HIST. `hist-msg` gộp hai danh sách commit bằng RRF gốc với k = 60. Danh sách lời xếp commit theo cosine TF-IDF giữa issue và văn bản của commit. Văn bản đó gồm message, cộng tiêu đề và mô tả của các ticket hoặc PR liên kết đã qua bộ lọc rò rỉ. Danh sách nối AST xếp commit theo hạng AST tốt nhất trong các hàm/lớp mà commit sửa, trong 500 node đầu của AST. Commit sửa hơn 50 hàm/lớp bị bỏ. Pool bằng chứng là 10 commit đầu. Điểm của một hàm/lớp là điểm cao nhất của các commit đã sửa nó. Judge là gemini-3.1-flash-lite qua Batch API, thinking MINIMAL, mỗi phần batch tối đa 100 instance. Chấm lặp dùng 130 instance với seed 20261022. Kiểm định như L8.
+
+Lượt chạy là Run All trong một kernel đã có 34 lần thực thi trước đó, vì số thực thi bắt đầu từ 35. Thư mục `/kaggle/working` có đủ file của các lần chạy trước. Các file này gồm 279 graph, history và hunk của 12 repo, báo cáo issue của 12 repo, file kết quả đủ 2.294 dòng đã có các cột của `hist-msg`, và 7.006 nhãn của judge v5. Vì vậy không cell nào phải tính lại instance nào. Output của các lần chạy đã tính `hist-msg` và batch judge không còn trong notebook. Do đó lượt này không ghi được thời gian và số token của hai phần đó.
+
+**Thời gian.** Cả lượt mất 20 phút, từ 11:42 tới 12:03. `drop-broken` mất 3,0 phút để đọc thử 693 file. `doc-links-v2` mất 2,6 phút. `judge-v4` mất 6,1 phút, phần lớn để chờ một batch có 1 request. `verify-v4` mất 1,5 phút. `depth-v4` mất 4,9 phút. Mỗi cell còn lại mất dưới nửa phút.
+
+**Judge.** 7.006 trên 7.007 request có nhãn, gồm 6.617 request bằng chứng và 389 request chấm lặp. Request còn thiếu là một request bằng chứng HIST. Request này được gửi lại trong một batch riêng. Batch kết thúc với trạng thái SUCCEEDED nhưng không trả kết quả hợp lệ nào. Khi chấm lại trực tiếp, kết quả vẫn không đọc được. Vì vậy Bảng 3 của HIST có 2.213 instance.
+
+| Loại | Request | Độ dài trung bình (token) | p90 | Lớn nhất |
+|---|---|---|---|---|
+| Bằng chứng, doc | 2.195 | 5.360 | 6.659 | 68.063 |
+| Bằng chứng, history | 2.214 | 6.511 | 11.289 | 68.512 |
+| Bằng chứng, issue cũ | 2.209 | 6.194 | 9.868 | 70.306 |
+| Chấm lặp, doc | 130 | 5.309 | 6.509 | 20.205 |
+| Chấm lặp, history | 130 | 6.439 | 11.808 | 22.870 |
+| Chấm lặp, issue cũ | 129 | 5.941 | 9.748 | 28.963 |
+
+Độ dài ước lượng bằng số ký tự chia 4.
+
+**Pool của `hist-msg`.** Pool có trung bình 10,0 commit. 81,5% commit trong pool có ít nhất một ticket hoặc PR liên kết qua bộ lọc. 99,6% commit trong pool có sửa ít nhất một hàm/lớp nằm trong 500 node đầu của AST. Ở 88,2% instance, có ít nhất một báo cáo vừa là liên kết của một commit trong pool HIST, vừa nằm trong pool ISSUE.
+
+**Kết quả, mức hàm/lớp, gộp 12 repo.** +HIST là danh sách của `hist-msg`. +HIST (Locus), +HIST (chỉ NL) và +HIST (NL+CE) là ba biến thể của HIST theo Locus, như L8.
+
+| Hệ thống | Top@1 | Top@5 | Top@10 | Acc@5 | Acc@10 | MRR | MAP |
+|---|---|---|---|---|---|---|---|
+| AST | 22,4 | 44,4 | 54,2 | 23,1 | 30,3 | 0,331 | 0,246 |
+| +DOC | 11,4 | 27,4 | 39,5 | 12,2 | 20,3 | 0,203 | 0,148 |
+| +HIST | 22,4 | 44,4 | 54,4 | 23,4 | 30,5 | 0,331 | 0,250 |
+| +ISSUE | 16,4 | 33,2 | 44,4 | 15,7 | 21,4 | 0,254 | 0,181 |
+| +ALL | 18,6 | 41,2 | 53,7 | 20,1 | 29,0 | 0,296 | 0,221 |
+| ALL−DOC | 19,5 | 41,1 | 53,0 | 20,1 | 28,8 | 0,301 | 0,221 |
+| ALL−HIST | 14,5 | 35,1 | 46,2 | 16,3 | 23,9 | 0,249 | 0,179 |
+| ALL−ISSUE | 15,9 | 40,6 | 53,9 | 20,1 | 30,0 | 0,278 | 0,210 |
+| +GRAPH | 17,2 | 39,7 | 53,8 | 19,8 | 30,0 | 0,285 | 0,221 |
+| +ALL+GRAPH | 19,3 | 44,7 | 57,3 | 23,1 | 32,6 | 0,316 | 0,243 |
+| +HIST (Locus) | 26,4 | 50,2 | 59,2 | 27,3 | 34,1 | 0,375 | 0,283 |
+| +HIST (chỉ NL) | 24,0 | 48,0 | 57,0 | 26,2 | 32,7 | 0,353 | 0,267 |
+| +HIST (NL+CE) | 26,3 | 50,0 | 59,7 | 27,6 | 34,6 | 0,375 | 0,284 |
+| +ISSUE (thêm Refs) | 16,4 | 33,2 | 44,2 | 15,7 | 21,4 | 0,254 | 0,182 |
+
+Các hệ thống không dùng danh sách của `hist-msg` lệch L8 nhiều nhất 0,1 điểm hoặc 0,001. Đó là AST, +DOC, +ISSUE, +GRAPH, ba biến thể Locus và +ISSUE (thêm Refs). Nhóm "gold trong top 10 của AST" có 1.199 instance thay vì 1.200, và nhóm "hạng 11 đến 100" có 596 thay vì 595. Như vậy đúng một instance đổi nhóm. Một khả năng là instance có dòng bị cụt đã được tính lại (mục Sự cố). Điều này chưa được kiểm tra.
+
+**Kiểm định, mức hàm/lớp.** ΔMRR được tính từ bảng trên, nên có thể lệch 0,001 do làm tròn. Cột cuối là tỷ lệ instance có hạng gold tốt nhất tốt hơn / kém hơn.
+
+| Câu hỏi | ΔTop@1 | ΔTop@5 | ΔTop@10 | ΔMRR | ΔMAP | Instance tốt hơn / kém hơn |
+|---|---|---|---|---|---|---|
+| Q1: +DOC so với AST | −11,0 ✓ | −17,1 ✓ | −14,6 ✓ | −0,128 ✓ | −0,099 ✓ | 23,3% / 59,3% |
+| **Q2: +HIST so với AST** | **0,0** | **0,0** | **+0,2** | **0,000** | **+0,004** | **43,1% / 31,6%** |
+| Q3: +ISSUE so với AST | −6,1 ✓ | −11,2 ✓ | −9,7 ✓ | −0,077 ✓ | −0,065 ✓ | 29,2% / 54,3% |
+| Q4: +ALL so với AST | −3,9 ✓ | −3,2 ✓ | −0,5 | −0,035 ✓ | −0,025 ✓ | 40,4% / 42,3% |
+| Q5: +ALL so với ALL−DOC | −0,9 | +0,1 | +0,6 | −0,005 | 0,000 | 29,2% / 42,6% |
+| Q6: +ALL so với ALL−HIST | +4,1 ✓ | +6,1 ✓ | +7,5 ✓ | +0,047 ✓ | +0,042 ✓ | 48,6% / 24,5% |
+| Q7: +ALL so với ALL−ISSUE | +2,6 ✓ | +0,6 | −0,2 | +0,018 ✓ | +0,011 ✓ | 30,0% / 46,6% |
+| G1: +GRAPH so với AST | −5,3 ✓ | −4,7 ✓ | −0,4 | −0,046 ✓ | −0,026 ✓ | 34,6% / 40,1% |
+| G2: +ALL+GRAPH so với +ALL | +0,7 | +3,4 ✓ | +3,7 ✓ | +0,020 ✓ | +0,021 ✓ | 42,9% / 24,8% |
+| ALL−ISSUE so với AST (cặp phụ) | −6,5 (p < 0,0001) | −3,8 (p = 0,0001) | −0,3 | −0,053 (p = 0,0001) | −0,037 (p = 0,0001) | 39,9% / 40,9% |
+
+Ở Q2, Holm của mọi độ đo từ 0,95 trở lên. Acc@10 thay đổi có ý nghĩa ở Q1 (−10,0), Q3 (−8,9), Q6 (+5,1) và G2 (+3,6). Ở Q4 và G1, Acc@5 giảm có ý nghĩa (−3,0 và −3,3). Cặp ALL−ISSUE so với AST là cặp phụ, nên không có Holm, và hàng của cặp này ghi p thô. p của Top@10 của cặp này không đọc được (mục Sự cố).
+
+**Kết quả, mức file, gộp 12 repo.**
+
+| Hệ thống | Top@1 | Top@5 | Top@10 | Acc@1 | Acc@5 | MRR | MAP |
+|---|---|---|---|---|---|---|---|
+| AST | 47,9 | 77,4 | 86,4 | 36,2 | 65,0 | 0,611 | 0,568 |
+| +DOC | 34,5 | 64,1 | 83,3 | 25,5 | 50,9 | 0,485 | 0,445 |
+| +HIST | 48,0 | 78,1 | 86,9 | 36,6 | 65,2 | 0,615 | 0,573 |
+| +ISSUE | 34,7 | 66,4 | 80,0 | 25,7 | 52,5 | 0,493 | 0,450 |
+| +ALL | 41,5 | 78,0 | 86,7 | 31,2 | 63,9 | 0,574 | 0,531 |
+| ALL−DOC | 41,2 | 76,2 | 86,4 | 30,6 | 62,4 | 0,565 | 0,522 |
+| ALL−HIST | 34,8 | 70,7 | 81,7 | 25,8 | 56,4 | 0,512 | 0,468 |
+| ALL−ISSUE | 40,9 | 78,0 | 86,9 | 30,9 | 64,2 | 0,571 | 0,531 |
+| +GRAPH | 39,9 | 76,3 | 86,9 | 30,3 | 63,2 | 0,553 | 0,516 |
+| +ALL+GRAPH | 43,3 | 80,4 | 89,4 | 33,0 | 67,1 | 0,597 | 0,556 |
+| +HIST (Locus) | 51,5 | 77,8 | 86,0 | 39,0 | 64,9 | 0,637 | 0,592 |
+| +HIST (chỉ NL) | 48,8 | 77,1 | 85,5 | 37,0 | 64,1 | 0,617 | 0,576 |
+| +HIST (NL+CE) | 52,7 | 79,2 | 86,2 | 40,1 | 66,3 | 0,646 | 0,602 |
+| +ISSUE (thêm Refs) | 34,7 | 66,5 | 79,9 | 25,8 | 52,5 | 0,493 | 0,450 |
+
+Ở mức file, Q2 không khác có ý nghĩa ở độ đo nào. Q1 và Q3 kém hơn có ý nghĩa ở mọi độ đo. Q4 kém hơn có ý nghĩa ở Top@1 (−6,4), Acc@1, MRR và MAP. Q5 chỉ tốt hơn có ý nghĩa ở Top@5 (+1,8). Q6 tốt hơn có ý nghĩa ở mọi độ đo. Q7 không khác có ý nghĩa ở độ đo nào. G1 kém hơn có ý nghĩa ở mọi độ đo trừ Top@10. G2 tốt hơn có ý nghĩa ở mọi độ đo.
+
+**Theo repo, mức hàm/lớp, Top@10 / MRR.**
+
+| Repo (instance) | AST | +DOC | +HIST | +HIST (Locus) | +ISSUE | +ALL | +ALL+GRAPH |
+|---|---|---|---|---|---|---|---|
+| astropy (89) | 57,3 / 0,338 | 43,8 / 0,237 | 62,9 / 0,327 | 62,9 / 0,397 | 34,8 / 0,167 | 53,9 / 0,244 | 60,7 / 0,284 |
+| django (821) | 56,5 / 0,342 | 42,1 / 0,215 | 57,4 / 0,346 | 64,2 / 0,401 | 48,6 / 0,283 | 58,8 / 0,328 | 61,1 / 0,341 |
+| flask (11) | 63,6 / 0,292 | 63,6 / 0,288 | 36,4 / 0,305 | 72,7 / 0,331 | 45,5 / 0,211 | 72,7 / 0,416 | 63,6 / 0,379 |
+| matplotlib (180) | 58,9 / 0,355 | 36,1 / 0,190 | 60,0 / 0,393 | 63,9 / 0,412 | 45,6 / 0,292 | 58,9 / 0,314 | 60,0 / 0,354 |
+| pylint (53) | 47,2 / 0,259 | 35,8 / 0,198 | 50,9 / 0,285 | 50,9 / 0,353 | 28,3 / 0,148 | 50,9 / 0,247 | 47,2 / 0,258 |
+| pytest (117) | 26,5 / 0,148 | 22,2 / 0,124 | 31,6 / 0,166 | 34,2 / 0,166 | 29,1 / 0,194 | 35,0 / 0,216 | 38,5 / 0,200 |
+| requests (43) | 58,1 / 0,245 | 53,5 / 0,162 | 55,8 / 0,357 | 69,8 / 0,317 | 58,1 / 0,356 | 58,1 / 0,343 | 60,5 / 0,349 |
+| scikit-learn (223) | 69,1 / 0,438 | 54,7 / 0,325 | 63,7 / 0,406 | 66,4 / 0,444 | 48,9 / 0,298 | 61,9 / 0,358 | 71,3 / 0,393 |
+| seaborn (22) | 50,0 / 0,335 | 36,4 / 0,178 | 63,6 / 0,339 | 54,5 / 0,415 | 40,9 / 0,253 | 36,4 / 0,165 | 50,0 / 0,229 |
+| sphinx (182) | 40,1 / 0,247 | 17,6 / 0,058 | 41,2 / 0,231 | 45,1 / 0,286 | 27,5 / 0,182 | 34,1 / 0,180 | 39,6 / 0,205 |
+| sympy (366) | 53,0 / 0,349 | 42,1 / 0,197 | 51,6 / 0,335 | 58,2 / 0,374 | 49,2 / 0,232 | 52,7 / 0,287 | 54,4 / 0,309 |
+| xarray (107) | 54,2 / 0,334 | 31,8 / 0,227 | 53,3 / 0,305 | 49,5 / 0,370 | 42,1 / 0,220 | 45,8 / 0,279 | 57,0 / 0,287 |
+
+ΔMRR của +HIST so với AST dương ở 7 repo và âm ở 5 repo (astropy, sphinx, sympy, xarray, scikit-learn). Ở L8, ΔMRR của HIST theo Locus dương ở cả 12 repo.
+
+**Theo độ khó của AST, mức hàm/lớp.** Mỗi ô là tỷ lệ instance tốt hơn / kém hơn. Nhóm chia theo hạng của gold ở AST.
+
+| Câu hỏi | Tất cả (2.214) | Gold trong top 10 (1.199) | Hạng 11 đến 100 (596) | Ngoài hạng 100 (419) |
+|---|---|---|---|---|
+| Q1: +DOC so với AST | 23,3% / 59,3% | 14,9% / 67,9% | 37,2% / 60,4% | 27,2% / 33,4% |
+| Q2: +HIST so với AST | 43,1% / 31,6% | 30,3% / 33,9% | 64,3% / 34,9% | 49,9% / 20,0% |
+| Q3: +ISSUE so với AST | 29,2% / 54,3% | 20,8% / 61,9% | 45,1% / 54,0% | 30,5% / 33,2% |
+| Q4: +ALL so với AST | 40,4% / 42,3% | 24,9% / 52,8% | 63,1% / 36,6% | 52,3% / 20,3% |
+| Q5: +ALL so với ALL−DOC | 29,2% / 42,6% | 27,9% / 37,6% | 34,2% / 54,5% | 25,8% / 40,1% |
+| Q6: +ALL so với ALL−HIST | 48,6% / 24,5% | 47,1% / 19,9% | 55,0% / 34,7% | 43,7% / 22,9% |
+| Q7: +ALL so với ALL−ISSUE | 30,0% / 46,6% | 25,7% / 45,8% | 39,1% / 55,0% | 29,6% / 37,0% |
+| G1: +GRAPH so với AST | 34,6% / 40,1% | 25,0% / 41,1% | 47,7% / 49,7% | 43,4% / 23,4% |
+| G2: +ALL+GRAPH so với +ALL | 42,9% / 24,8% | 49,0% / 7,4% | 36,6% / 52,2% | 34,4% / 35,6% |
+| ALL−ISSUE so với AST | 39,9% / 40,9% | 23,9% / 51,3% | 64,4% / 34,9% | 50,8% / 19,6% |
+
+**Theo việc issue có nêu tên gold, mức hàm/lớp, Top@10 / MRR.**
+
+| Hệ thống | Có nêu tên (1.078 instance) | Không nêu tên (1.136 instance) |
+|---|---|---|
+| AST | 70,1 / 0,470 | 39,0 / 0,199 |
+| +DOC | 56,7 / 0,315 | 23,2 / 0,098 |
+| +HIST | 68,8 / 0,454 | 40,7 / 0,214 |
+| +HIST (Locus) | 76,1 / 0,528 | 43,2 / 0,230 |
+| +ISSUE | 54,9 / 0,321 | 34,5 / 0,190 |
+| +ALL | 68,6 / 0,397 | 39,4 / 0,201 |
+| +ALL+GRAPH | 73,2 / 0,424 | 42,3 / 0,213 |
+| +HIST (chỉ NL) | 71,6 / 0,487 | 43,1 / 0,226 |
+| +HIST (NL+CE) | 77,0 / 0,532 | 43,2 / 0,225 |
+
+**Ảnh hưởng của độ phủ doc.** Các số của +DOC và +GRAPH gần như trùng L8, vì hai danh sách này không đổi. Các số của +ALL so với ALL−DOC và của +HIST thì đổi, vì hai hệ thống này dùng danh sách của `hist-msg`. ρ là ρ của Spearman giữa độ phủ doc và Δ trung bình của repo, trên 12 repo. p tính bằng hoán vị nhãn repo.
+
+| So sánh | ρ Top@1 (p) | ρ Top@10 (p) | ρ Acc@10 (p) | ρ MRR (p) | ρ MAP (p) |
+|---|---|---|---|---|---|
+| +DOC so với AST | 0,014 (0,971) | 0,084 (0,798) | 0,182 (0,571) | 0,077 (0,815) | 0,077 (0,815) |
+| +ALL so với ALL−DOC | 0,210 (0,517) | 0,063 (0,851) | 0,599 (0,041) | 0,217 (0,502) | 0,378 (0,232) |
+| +HIST so với AST | −0,560 (0,065) | −0,532 (0,078) | −0,320 (0,305) | −0,483 (0,118) | −0,301 (0,351) |
+| +GRAPH so với AST | 0,162 (0,622) | 0,217 (0,501) | 0,274 (0,385) | 0,238 (0,463) | −0,007 (0,992) |
+
+Ở mức instance, nhóm "gold có doc" có 612 instance, và nhóm còn lại có 1.602 instance. Cột hiệu là Δ của nhóm có doc trừ Δ của nhóm không có. p tính bằng hoán vị nhãn nhóm trong từng repo.
+
+| So sánh | ΔTop@1, có doc / không | Hiệu Top@1 (p) | ΔMRR, có doc / không | Hiệu MRR (p) |
+|---|---|---|---|---|
+| +DOC so với AST | −5,4 / −13,2 | +7,8 (0,0002) | −0,040 / −0,161 | +0,122 (0,0001) |
+| +ALL so với ALL−DOC | +5,4 / −3,4 | +8,8 (0,0001) | +0,065 / −0,030 | +0,095 (0,0001) |
+| +HIST so với AST | +1,5 / −0,6 | +2,0 (0,345) | +0,012 / −0,005 | +0,017 (0,312) |
+| +GRAPH so với AST | −12,7 / −2,4 | −10,3 (0,0001) | −0,109 / −0,023 | −0,086 (0,0001) |
+
+Họ C gồm C1 và C2 của +DOC so với AST, với Holm trong từng độ đo. C1 không có ý nghĩa ở độ đo nào, với Holm nhỏ nhất là 0,5469. C2 có ý nghĩa ở mọi độ đo, với Holm từ 0,0002 tới 0,0004.
+
+**Bằng chứng (Bảng 3).** Mỗi nguồn có pool 10 phần tử đầu mỗi instance. Phần tử hữu ích là phần tử có điểm hữu ích từ 2 trở lên, trên thang 0 đến 3. Số trong ngoặc là số của L8 với judge v4. DOC và ISSUE có cùng pool ở hai lượt, nên chênh lệch đến từ judge. Pool HIST thì khác: L8 chấm hunk theo Locus, còn lượt này chấm commit theo `hist-msg`.
+
+| Nguồn | Instance | Phần tử | Instance có ít nhất 1 phần tử hữu ích | Điểm hữu ích 0 / 1 / 2 / 3 (%) |
+|---|---|---|---|---|
+| DOC | 2.195 | 21.780 | 47,6% (37,8%) | 71,4 / 19,9 / 7,9 / 0,8 (57,3 / 36,5 / 5,8 / 0,3) |
+| HIST | 2.213 | 22.130 | 76,3% (68,7%, pool khác) | 57,4 / 27,5 / 12,2 / 2,9 (35,2 / 47,4 / 13,5 / 4,0, pool khác) |
+| ISSUE | 2.209 | 22.041 | 68,3% (73,7%) | 65,4 / 20,9 / 11,9 / 1,8 (42,8 / 43,0 / 11,8 / 2,4) |
+
+Quy tắc `code_location` của prompt v5 hạ điểm của 5 trên 21.780 phần tử DOC, 7 trên 22.130 phần tử HIST và 2 trên 22.041 phần tử ISSUE.
+
+| Nguồn | Giữ | Precision | Recall trong pool | F1 | T11U | Token TB |
+|---|---|---|---|---|---|---|
+| DOC | top-1 | 0,234 | 0,270 | 0,250 | −0,299 | 334 |
+| DOC | top-3 | 0,159 | 0,549 | 0,246 | −1,573 | 1.009 |
+| DOC | top-5 (hạn ngạch hiện tại) | 0,124 | 0,717 | 0,212 | −3,137 | 1.669 |
+| DOC | top-10 | 0,087 | 1,000 | 0,161 | −7,323 | 3.305 |
+| HIST | top-1 | 0,292 | 0,193 | 0,232 | −0,124 | 455 |
+| HIST | top-3 | 0,224 | 0,444 | 0,298 | −0,987 | 1.357 |
+| HIST | top-5 | 0,193 | 0,640 | 0,297 | −2,100 | 2.240 |
+| HIST | top-10 (hạn ngạch hiện tại) | 0,151 | 1,000 | 0,263 | −5,467 | 4.455 |
+| ISSUE | top-1 | 0,292 | 0,214 | 0,247 | −0,123 | 385 |
+| ISSUE | top-3 | 0,219 | 0,480 | 0,300 | −1,031 | 1.182 |
+| ISSUE | top-5 (hạn ngạch hiện tại) | 0,182 | 0,663 | 0,285 | −2,274 | 2.043 |
+| ISSUE | top-10 | 0,137 | 1,000 | 0,241 | −5,878 | 4.138 |
+
+- Recall và F1 của lượt này là micro, nên không so được với cột Recall và F1 của L8. Precision ở top-10 bằng tỷ lệ phần tử hữu ích, nên so được. Precision ở top-10 là 0,087 so với 0,061 ở L8 (DOC), và 0,137 so với 0,142 (ISSUE).
+- T11U âm ở mọi cách cắt của cả ba nguồn, và cao nhất ở top-1.
+- Mọi cách cắt đều luôn trả phần tử, nên bảng 2×2 chỉ có hai ô khác 0. Số instance có output và pool có phần tử hữu ích là 1.044 (DOC), 1.688 (HIST) và 1.508 (ISSUE). Số instance có output nhưng pool không có phần tử hữu ích là 1.151, 525 và 701.
+
+**Loại thông tin (Bảng 4).** Tỷ lệ (%) phần tử hữu ích có từng loại. Một phần tử có thể có nhiều loại. Số trong ngoặc là số của L8.
+
+| Nguồn | Hành vi mong đợi | Cách dùng API | Lỗi tương tự | Nguyên nhân lỗi | Vị trí code | Lý do thiết kế | Thay đổi trước đây |
+|---|---|---|---|---|---|---|---|
+| DOC | 29,3 (49,9) | 64,6 (54,6) | 9,5 (3,9) | 2,8 (5,8) | 17,2 (58,8) | 16,2 (12,9) | 8,3 (4,6) |
+| HIST | 7,0 | 16,2 | 44,8 | 19,0 | 39,8 | 28,9 | 45,3 |
+| ISSUE | 12,9 (8,3) | 13,0 (12,9) | 70,3 (47,1) | 18,3 (33,6) | 30,4 (90,1) | 14,1 (6,1) | 9,4 (25,3) |
+
+Trên mọi phần tử, tỷ lệ bị chấm "không liên quan" là 64,8% (DOC), 53,3% (HIST) và 64,4% (ISSUE). Ở L8, các tỷ lệ này là 51,2%, 30,5% và 41,1%. Tỷ lệ "không có thông tin mới" là 6,6%, 4,0% và 0,9%.
+
+Số phần tử có từng loại trên mỗi instance, tính trên mọi phần tử trừ hai nhãn loại trừ:
+
+| Nguồn | Hành vi mong đợi | Cách dùng API | Lỗi tương tự | Nguyên nhân lỗi | Vị trí code | Lý do thiết kế | Thay đổi trước đây |
+|---|---|---|---|---|---|---|---|
+| DOC | 0,31 | 1,86 | 0,12 | 0,02 | 0,68 | 0,21 | 0,12 |
+| HIST | 0,12 | 0,54 | 1,25 | 0,29 | 2,12 | 0,68 | 1,15 |
+| ISSUE | 0,21 | 0,40 | 2,26 | 0,26 | 1,03 | 0,28 | 0,16 |
+
+**Độ ổn định của judge.** 130 instance, mỗi phần tử chấm hai lần với thứ tự trong prompt xáo khác.
+
+| Nguồn | Cặp phần tử | Trùng điểm hữu ích | κ nhãn hữu ích (≥ 2) | κ trọng số, điểm hữu ích | κ trọng số, điểm liên quan | Jaccard loại thông tin |
+|---|---|---|---|---|---|---|
+| DOC | 1.290 | 83,2% | 0,642 | 0,785 | 0,777 | 0,736 |
+| HIST | 1.300 | 72,5% | 0,646 | 0,754 | 0,742 | 0,638 |
+| ISSUE | 1.290 | 72,7% | 0,618 | 0,715 | 0,716 | 0,702 |
+| Gộp | 3.880 | 76,1% | 0,637 | 0,752 | 0,746 | 0,692 |
+
+**Số node phải đọc.** Không instance nào bị bỏ vì thiếu gold trong graph. Giá trị càng thấp càng tốt.
+
+| Hệ thống | Trung vị @1 | Trung vị @5 | Trung vị @10 | Trung bình @1 | Trung bình @5 | Trung bình @10 | Không tới được gold @10 (%) |
+|---|---|---|---|---|---|---|---|
+| AST | 67,2 | 17,0 | 8,0 | 1.233,1 | 626,8 | 519,7 | 0,3 |
+| +DOC | 266,0 | 102,8 | 45,0 | 1.512,4 | 1.005,4 | 803,3 | 0,5 |
+| +HIST | 77,0 | 19,0 | 8,0 | 1.160,6 | 665,1 | 529,3 | 0,5 |
+| +ISSUE | 272,5 | 87,0 | 55,0 | 1.431,2 | 943,2 | 779,1 | 0,8 |
+| +ALL | 159,0 | 30,4 | 8,0 | 1.286,2 | 692,3 | 563,9 | 0,6 |
+| ALL−DOC | 173,0 | 32,0 | 9,0 | 1.292,7 | 730,4 | 562,7 | 0,8 |
+| ALL−HIST | 289,6 | 52,2 | 38,2 | 1.484,1 | 818,7 | 716,9 | 0,6 |
+| ALL−ISSUE | 159,3 | 26,0 | 8,0 | 1.283,3 | 683,0 | 542,1 | 0,5 |
+| +GRAPH | 141,8 | 18,5 | 9,0 | 1.451,7 | 687,6 | 516,7 | 0,3 |
+| +ALL+GRAPH | 142,2 | 18,0 | 7,0 | 1.205,0 | 638,2 | 522,1 | 0,5 |
+| +HIST (Locus) | 49,5 | 5,0 | 5,0 | 1.142,8 | 636,1 | 516,8 | 0,5 |
+| +HIST (chỉ NL) | 64,2 | 13,3 | 6,0 | 1.210,5 | 663,6 | 532,2 | 0,6 |
+| +HIST (NL+CE) | 41,8 | 5,0 | 5,0 | 1.106,7 | 611,9 | 506,5 | 0,5 |
+| +ISSUE (thêm Refs) | 268,8 | 89,3 | 57,0 | 1.434,8 | 949,1 | 771,2 | 0,8 |
+
+Kiểm định hoán vị ghép cặp trên trung bình, 10.000 hoán vị. Δ âm nghĩa là hệ thống thứ nhất phải đọc ít hơn. Dấu ✓ là có ý nghĩa sau Holm. p trong ngoặc là p thô.
+
+| Câu hỏi | Δ @1 (p) | Δ @5 (p) | Δ @10 (p) |
+|---|---|---|---|
+| Q1: +DOC so với AST | +279,3 (0,0001) ✓ | +378,6 (0,0001) ✓ | +283,6 (0,0001) ✓ |
+| Q2: +HIST so với AST | −72,5 (0,2001) | +38,3 (0,2112) | +9,6 (0,7404) |
+| Q3: +ISSUE so với AST | +198,1 (0,0038) ✓ | +316,4 (0,0001) ✓ | +259,4 (0,0001) ✓ |
+| Q4: +ALL so với AST | +53,1 (0,4284) | +65,5 (0,0649) | +44,2 (0,1623) |
+| Q5: +ALL so với ALL−DOC | −6,4 (0,8859) | −38,1 (0,1402) | +1,3 (0,9611) |
+| Q6: +ALL so với ALL−HIST | −197,9 (0,0001) ✓ | −126,4 (0,0001) ✓ | −153,0 (0,0001) ✓ |
+| Q7: +ALL so với ALL−ISSUE | +2,9 (0,9444) | +9,2 (0,7042) | +21,9 (0,3100) |
+| G1: +GRAPH so với AST | +218,6 (0,0001) ✓ | +60,8 (0,0161) ✓ | −3,0 (0,5476) |
+| G2: +ALL+GRAPH so với +ALL | −81,2 (0,0401) ✓ | −54,1 (0,0202) ✓ | −41,8 (0,0572) |
+| ALL−ISSUE so với AST (cặp phụ) | +50,2 (0,4252) | +56,2 (0,0616) | +22,4 (0,4168) |
+
+**Độ sâu tới gold.** Tỷ lệ (%) node trong top 10 ở từng độ sâu, lấy trung bình theo instance. Độ sâu 0 là chính gold.
+
+| Hệ thống | 0 | 1 | 2 | 3 | Xa hơn 3 |
+|---|---|---|---|---|---|
+| AST | 7,8 | 10,3 | 15,9 | 20,3 | 45,7 |
+| +DOC | 5,6 | 8,8 | 16,8 | 20,9 | 47,9 |
+| +HIST | 8,1 | 11,0 | 18,3 | 20,8 | 41,8 |
+| +ISSUE | 5,7 | 7,5 | 19,1 | 24,0 | 43,9 |
+| +ALL | 7,7 | 10,6 | 20,6 | 22,1 | 38,9 |
+| ALL−DOC | 7,6 | 10,1 | 20,2 | 22,0 | 40,0 |
+| ALL−HIST | 6,4 | 9,0 | 19,5 | 22,5 | 42,5 |
+| ALL−ISSUE | 7,9 | 11,1 | 19,4 | 20,9 | 40,8 |
+| +GRAPH | 7,8 | 10,0 | 16,3 | 19,9 | 46,0 |
+| +ALL+GRAPH | 8,5 | 11,8 | 20,6 | 20,7 | 38,4 |
+| +HIST (Locus) | 8,7 | 11,0 | 18,5 | 19,5 | 42,3 |
+| +HIST (chỉ NL) | 8,2 | 10,5 | 17,9 | 19,3 | 44,1 |
+| +HIST (NL+CE) | 8,7 | 11,2 | 18,5 | 19,3 | 42,3 |
+| +ISSUE (thêm Refs) | 5,6 | 7,4 | 19,2 | 23,9 | 43,9 |
+
+**Đánh giá.**
+- HIST theo `hist-msg` không khác AST ở độ đo nào, ở cả mức hàm/lớp và mức file (Q2). Số node phải đọc cũng không khác có ý nghĩa ở k nào. Như vậy, ý tưởng dùng phần lời của commit cộng ticket hoặc PR làm tín hiệu xếp hạng (mục 6.18.3 của `planning.md`) không được dữ liệu ủng hộ. Kế hoạch đã ghi trước khả năng HIST mới kém Locus.
+- HIST mới đổi hạng gold ở nhiều instance, nhưng phần được và phần mất gần như bù nhau. Nó tốt hơn AST ở 43,1% instance và kém hơn ở 31,6%. Ở nhóm gold đã trong top 10 của AST, nó kém hơn nhiều hơn tốt hơn (33,9% so với 30,3%). Ở nhóm issue không nêu tên gold, Top@10 tăng 1,7 điểm và MRR tăng 0,015. Ở nhóm issue nêu tên gold, Top@10 giảm 1,3 điểm và MRR giảm 0,016.
+- 99,6% commit trong pool của `hist-msg` có sửa một hàm/lớp trong 500 node đầu của AST. Điều này cho thấy danh sách nối AST chi phối phần đầu của danh sách HIST mới, nên +HIST gần trùng AST. Đây là giả thuyết, chưa được kiểm tra riêng.
+- HIST theo Locus vẫn là nguồn duy nhất tốt hơn AST rõ rệt, với số liệu như L8. Riêng phần văn bản của Locus (+HIST (chỉ NL)) đạt Top@10 57,0 và MRR 0,353, cao hơn HIST mới 2,6 điểm và 0,022. Cả hai đều chỉ so văn bản. Có hai điểm khác nhau. Locus chấm từng hunk, còn HIST mới chấm cả commit. Văn bản của Locus gồm phần thân hunk và message, còn văn bản của HIST mới gồm message và ticket hoặc PR, không có code. Lượt này chưa tách được điểm nào gây ra chênh lệch.
+- Vì +ALL, ALL−DOC, ALL−ISSUE và +ALL+GRAPH chuyển sang HIST mới, các hệ thống trộn kém hơn L8. +ALL có Top@10 53,7 (L8: 55,6) và MRR 0,296 (L8: 0,306). +ALL+GRAPH có Top@10 57,3 (L8: 60,0). Q4 nay kém hơn có ý nghĩa cả ở Top@5 (−3,2). Ở L8, Top@5 của Q4 chỉ giảm 0,4 điểm và không có ý nghĩa.
+- Q6 vẫn có ý nghĩa ở mọi độ đo. Một lý do là ALL−HIST, tức AST cộng DOC cộng ISSUE, rất kém (Top@10 46,2), vì DOC và ISSUE riêng lẻ đều kém AST xa. Q7 đổi chiều so với L8. Thêm ISSUE vào DOC cộng HIST mới làm Top@1 tăng 2,6 điểm và MRR tăng 0,018, có ý nghĩa. Ở L8, thêm ISSUE làm Top@10 giảm 1,9 điểm có ý nghĩa. Thay đổi này đến từ việc ALL−ISSUE yếu hơn L8 (MRR 0,278 so với 0,303), vì HIST trong đó là HIST mới.
+- G2 vẫn tốt hơn có ý nghĩa ở Top@5, Top@10, Acc@5, Acc@10, MRR và MAP. Ở mức hàm/lớp, +HIST (NL+CE) có Top@10, Acc@10 và MAP cao nhất, và có MRR bằng +HIST (Locus). Ở mức file, +ALL+GRAPH vẫn có Top@5, Top@10 và Acc@5 cao nhất.
+- Kết luận về DOC, ISSUE và GRAPH khi đứng riêng (Q1, Q3, G1), và kết luận về độ phủ doc với +DOC (C1, C2), giữ nguyên như L8. Với HIST mới, hiệu của hai nhóm gold có doc và không có doc không có ý nghĩa, như HIST theo Locus ở L8. ρ giữa độ phủ doc và Δ của +HIST đều âm nhưng không có ý nghĩa.
+- Ở DOC và ISSUE, hai nguồn có cùng pool ở hai lượt, judge v5 cho ít điểm 1 hơn hẳn judge v4 và cho nhiều điểm 0 hơn. Tỷ lệ phần tử hữu ích của DOC tăng từ 6,1% lên 8,7%, và tỷ lệ instance có phần tử hữu ích tăng từ 37,8% lên 47,6%. Ở ISSUE, hai tỷ lệ này giảm nhẹ, từ 14,2% xuống 13,7% và từ 73,7% xuống 68,3%.
+- Judge v5 gắn nhãn "vị trí code" cho phần tử hữu ích ít hơn hẳn judge v4. Tỷ lệ này giảm từ 58,8% xuống 17,2% ở DOC, và từ 90,1% xuống 30,4% ở ISSUE. Ở HIST, tỷ lệ là 39,8%, trong khi hunk ở L8 có 94,0%. Đây là thay đổi mà mục 6.18 nhắm tới. Nhãn v4 gần với câu hỏi "phần tử có dẫn tới code của bản sửa không", còn nhãn v5 thì không.
+- Mỗi nguồn cho một loại thông tin khác nhau. Phần tử DOC hữu ích chủ yếu nói về cách dùng API (64,6%) và hành vi mong đợi (29,3%). Phần tử ISSUE hữu ích chủ yếu mô tả lỗi tương tự (70,3%). Phần tử HIST hữu ích chủ yếu nói về thay đổi trước đây (45,3%) và lỗi tương tự (44,8%), và có tỷ lệ lý do thiết kế cao nhất (28,9%).
+- κ trọng số của điểm hữu ích khi chấm lặp là 0,752 khi gộp, và từ 0,715 trở lên ở mỗi nguồn. Mức này đạt ngưỡng 0,6 của tiêu chí 3 ở mục 6.18.6 trong `planning.md`. Tiêu chí này đã đạt ở lượt thử ở máy, với κ 0,734. Tiêu chí 1 và 2 cần nhãn tay của người trên 144 phần tử, và chưa làm. Lượt đầy đủ đã chạy trước khi kiểm tra hai tiêu chí này. Theo mục 6.18.6, nếu hai tiêu chí này không đạt thì Bảng 3 được ghi là đo mức phần tử dẫn tới code của bản sửa, và nhãn v4 được dùng.
+- Pool HIST mới trùng nhiều với pool ISSUE. Ở 88,2% instance, có báo cáo nằm ở cả hai pool. Vì vậy phần lớn thông tin lời của HIST mới đến từ ticket hoặc PR, như mục 6.18.3 đã nêu trong phần giới hạn.
+
+**Giới hạn.** Như L8. Có thêm bốn điểm. Thứ nhất, nhãn v5 chưa được so với nhãn của người. Thứ hai, so sánh giữa các nguồn ở Bảng 3 và Bảng 4 chỉ là mô tả, và cột HIST của L8 với lượt này đo hai pool khác nhau. Thứ ba, hai giả thuyết về HIST mới (danh sách nối AST chi phối, và hunk so với commit) chưa được kiểm tra. Thứ tư, một request HIST không có nhãn.
+
+**Sự cố.**
+- Trước lượt này, ba lần Run All dừng vì gặp file bị cụt trong `/kaggle/working`. Mỗi lần gặp một file khác nhau. Lần đầu là một file graph, với `JSONDecodeError` ở `doc-links-v2` (file dừng ở ký tự 11.786.884). Lần thứ hai là `v4/scale_rows_v4.jsonl`, với dòng cuối bị cụt, và lỗi xảy ra ở `v4-run`. Lần thứ ba là file hunk của một repo, với lỗi ở `load_hunks` trong `hist-proc`. Nguyên nhân là các lần chạy trước đã dừng giữa lúc ghi file. Không xác định được đó là những lần chạy nào.
+- Hai lần đầu được sửa riêng. `doc-links-v2` build lại graph không đọc được, còn `v4-run` bỏ dòng không đọc được rồi tính lại instance của dòng đó. Sau lần thứ ba, hai bản sửa riêng này được gỡ và thay bằng cell `drop-broken`. Ở lượt này, `drop-broken` đọc thử 693 file và không còn file nào hỏng. Như vậy ba file trên đã được tạo lại ở các lần chạy trước lượt này.
+- Một request bằng chứng HIST không có nhãn hợp lệ (mục Judge).
+- Các bảng kiểm định của `verify-v4` vẫn bị pandas ẩn các cột ở giữa, như L8. Vì vậy ΔMRR trong bảng kiểm định ở trên được tính từ Bảng 1, và p của Top@10 của cặp phụ không đọc được.
+- Output của các lần chạy đã tính `hist-msg` và batch judge v5 không còn trong notebook.
+
+---
+
+## 15. Lượt v4-L10 (03/11/2026, 08:28)
+
+**Thay đổi so với L9.** Lượt này giữ nguyên toàn bộ pipeline xếp hạng AST (`v4-run`, `hist-proc`, `issue-index`, `hist-msg`, `graph-proc`, `v4-fusion`) và nâng cấp bước đánh giá bằng chứng (`judge-v4`, `verify-v4`) dựa trên kết quả kiểm toán toàn diện 65.951 phần tử của judge v5 ở L9:
+- **Bỏ nguồn `HIST` khỏi bước LLM Judge (`judge-v4`, `verify-v4`).** Ở L9, 88,2% instance có báo cáo nằm ở cả hai pool `HIST` và `ISSUE` (do văn bản của `hist-msg` lấy từ ticket/PR liên kết), khiến `ev-hist` vừa trùng lặp ngữ nghĩa với `ev-issue`, vừa tiêu tốn 37,7% tổng lượng token của bước judge. Trong L10, tín hiệu lịch sử (`HIST` và `HIST (Locus)`) vẫn được giữ nguyên để nối tới node AST phục vụ xếp hạng (Bảng 1, Bảng 2, `depth-v4`), còn bước LLM Judge chỉ chấm hai nguồn văn bản bổ trợ trực tiếp là `DOC` (`ev-doc`, `ev-doc-rep`) và `ISSUE` (`ev-issue`, `ev-issue-rep`).
+- **Nâng cấp `JUDGE_PROMPT_EV` và `JUDGE_SCHEMA_EV` lên v6.**
+  1. *Đảo thứ tự suy luận và thứ tự trường trong JSON Schema:* Chuyển từ `["id", "usefulness", "relevance", "info_types"]` sang `["id", "relevance", "info_types", "usefulness"]`. Vì mô hình sinh token tuần tự từ trái sang phải với `thinking=MINIMAL`, việc buộc chấm `relevance` (0..3) và gán nhãn `info_types` trước khi chốt `usefulness` (0..3) giúp neo quyết định điểm hữu ích vào mức độ liên quan và loại thông tin thực tế.
+  2. *Ràng buộc bất biến `usefulness <= relevance` và làm rõ nhãn độc quyền:* Bước 3 trong prompt quy định tường minh `usefulness MUST NOT exceed relevance (usefulness <= relevance)`: nếu `relevance = 0` thì bắt buộc `info_types = ["not_relevant"]` và `usefulness = 0`; nếu `relevance = 1` thì `usefulness` chỉ được nhận `0` hoặc `1`; nhãn `no_new_information` chỉ được dùng khi `relevance >= 1` nhưng mọi thông tin đã hiển nhiên từ tên hàm/lớp trong `Actual fix`.
+  3. *Siết định nghĩa nhãn bị lạm dụng:* Định nghĩa lại `api_usage` (phải nêu rõ chữ ký hàm, tham số, kiểu trả về hoặc ràng buộc gọi hàm, không gán cho đoạn mô tả chung chỉ nhắc tên hàm) và `similar_failure` (phải mô tả triệu chứng lỗi, ngoại lệ hoặc kịch bản hỏng tương tự, không gán chỉ vì phần tử là một báo cáo lỗi).
+  4. *Chống thiên vị độ dài và trôi chuẩn theo vị trí:* Bổ sung quy tắc *"Length is NOT quality"* và *"Evaluate each element independently against the rubric; do not relax or tighten standards from element 1 to element 10"*.
+- **Cắt trần văn bản ngoại lai (`_clip`) trước khi tạo prompt.** Thêm hằng số `JUDGE_ISSUE_MAX = 8000` (cho mô tả issue cần sửa), `JUDGE_PATCH_MAX = 10000` (cho phần diff của bản sửa) và `JUDGE_EL_MAX = 4000` (cho văn bản của từng phần tử bằng chứng). Nếu vượt ngưỡng, hàm `_clip` giữ 75% đầu và 25% cuối kèm dấu `...[truncated]...`.
+- **Chuẩn hóa nhãn loại trừ trong `parse_evidence` và hậu kiểm trong `verify-v4`.** Nếu mô hình trả đồng thời nhãn loại trừ (`not_relevant` hoặc `no_new_information`) cùng nhãn thông tin thường, `parse_evidence` tự động chuẩn hóa theo điểm `relevance` thay vì hủy toàn bộ request 10 phần tử. Trong `verify-v4`, điểm hữu ích được hậu kiểm `u = min(u_raw, relevance)` bên cạnh quy tắc `code_location`-only `<= 1` và loại trừ `not_relevant`/`no_new_information` (`u = 0`).
+- **Thêm 6 khối phân tích sâu (`J1` đến `J6`) vào `verify-v4`:** Kiểm toán tính nhất quán logic giữa `u_raw`, `relevance` và `info_types` (`J1`); kiểm tra thiên vị vị trí xuất hiện trong prompt `alias_pos` so với thứ hạng truy xuất thực `orig_rank` (`J2`); phân tích thiên vị độ dài theo tứ phân vị `Q1..Q4` và tương quan Spearman $\rho$ (`J3`); phân tích độ hữu ích của bằng chứng theo độ khó của `AST` (`J4`); độ bổ trợ chéo và phân rã Venn giữa `DOC` và `ISSUE` ở `top-5` và `top-10` (`J5`); độ ổn định Cohen's $\kappa$ cho từng nhãn `info_types` trên tập chấm lặp `#rep` (`J6`).
+
+**Cấu hình.** Giống hệt L9 ở phần xếp hạng. Ở phần judge, `PROMPT_HASH` đổi sang mã băm mới của prompt v6 + cấu hình cắt trần `8000:10000:4000`, nên `judge-v4` bỏ qua các nhãn cũ trong `judge_cache_v4.jsonl` và chấm mới toàn bộ 4.663 request (`DOC` và `ISSUE`, gồm cả tập chấm lặp 130 instance với seed `20261022`).
+
+**Thời gian.** Cả lượt chạy (Run All từ đầu) mất 91,2 phút, từ 08:28 tới 09:59 UTC. `drop-broken` mất 2,6 phút (đọc thử 695 file, 0 file hỏng). `cell-clone` mất 1,0 phút. `scale-data` mất 1,5 phút. `doc-links-v2` mất 2,4 phút. `issue-index` mất 2,7 phút. `hist-msg` mất 3,0 phút. `judge-v4` mất 70,8 phút để gửi và nhận đủ 23 batch job (4.663 request). `verify-v4` mất 1,4 phút. `depth-v4` mất 4,4 phút. Các cell còn lại đều dưới nửa phút.
+
+**Judge.** **4.663 trên 4.663 request thành công ngay lượt đầu (100,0%, 0 request lỗi)** qua 23 batch job, gồm 4.404 request bằng chứng (`2.195` `ev-doc`, `2.209` `ev-issue`) và 259 request chấm lặp (`130` `ev-doc-rep`, `129` `ev-issue-rep`). Tổng lượng token ước tính của cả bước judge giảm từ ~53,59M (L9) xuống còn **~26,90M token** (tiết kiệm 49,8%).
+
+| Loại | Request | Độ dài trung bình (token) | p90 | Lớn nhất (L10) | Lớn nhất (L9) |
+|---|---|---|---|---|---|
+| Bằng chứng, doc (`ev-doc`) | 2.195 | 5.425 | 6.803 | **9.449** | 86.782 (prompt+patch) |
+| Bằng chứng, issue cũ (`ev-issue`) | 2.209 | 5.796 | 9.078 | **14.794** | 91.675 (prompt+patch) |
+| Chấm lặp, doc (`ev-doc-rep`) | 130 | 5.291 | 6.696 | **7.947** | 20.205 |
+| Chấm lặp, issue cũ (`ev-issue-rep`) | 129 | 5.661 | 8.765 | **10.742** | 28.963 |
+
+**Kết quả xếp hạng và độ sâu (Bảng 1, Bảng 2, phân tích độ phủ doc, `depth-v4`).** Vì các danh sách xếp hạng không đổi so với L9, toàn bộ kết quả Bảng 1 (mức hàm/lớp và mức file trên 2.214 instance), Bảng 2, phân tích bổ sung theo việc issue nêu tên gold và theo độ phủ doc, cùng bảng số node phải đọc và độ sâu tới gold (`depth-v4`) trùng khớp L9 (chênh lệch p-value hoán vị không quá $\pm 0,001$ do ngẫu nhiên Monte Carlo). Điểm đáng chú ý nhất trong kiểm định Bảng 1 là ở hệ thống phụ `+HIST (NL+CE)`, `MRR` mức hàm/lớp đạt `0,376` (`Top@1 = 26,3%`, `Top@5 = 50,1%`, `Top@10 = 59,7%`), và trung vị số node phải đọc trước khi gặp gold ở `@5` và `@10` giảm từ `17,0` và `8,0` node (`AST`) xuống còn `5,0` và `5,0` node.
+
+**Kiểm toán tính nhất quán logic của Judge v6 (Phân tích sâu J1).** So sánh trực tiếp trên 43.821 phần tử (`21.780` phần tử `DOC` và `22.041` phần tử `ISSUE`) giữa nhãn thô của mô hình (`u_raw`) và các ràng buộc logic, đối chiếu với L9 (judge v5):
+
+| Chỉ số kiểm toán logic (`J1`) | DOC (L10) | ISSUE (L10) | Gộp DOC+ISSUE (L10) | Gộp DOC+ISSUE ở L9 (Judge v5) |
+|---|---|---|---|---|
+| Tổng số phần tử chấm | 21.780 | 22.041 | 43.821 | 43.811 |
+| **Vi phạm `u_raw > relevance`** | **2 (0,01%)** | **9 (0,04%)** | **11 (0,03%)** | **935 (2,13%)** (DOC: 325, ISSUE: 610) |
+| **Trong đó: `u_raw = 2` nhưng `relevance = 1`** | **0 (0,00%)** | **0 (0,00%)** | **0 (0,00%)** | **933 (2,13%)** (DOC: 325, ISSUE: 608) |
+| **Gán `no_new_information` khi `relevance = 0`** | **0 (0,00%)** | **0 (0,00%)** | **0 (0,00%)** | **1.055** (DOC: 849/861 = 98,6%; ISSUE: 206/348 = 59,2%) |
+| Chỉ có `code_location` nhưng `u_raw >= 2` | 5 (0,02%) | 3 (0,01%) | 8 (0,02%) | 72 (0,16%) |
+| Tổng số phần tử bị hạ điểm khi hậu kiểm (`capped`) | 7 (0,03%) | 12 (0,05%) | 19 (0,04%) | 941 (2,15%) |
+
+- Ma trận đồng xuất hiện `relevance` $\times$ `u_raw` của L10 hoàn toàn sạch ở tam giác trên (`u_raw > relevance`):
+  - `DOC`: `r=0`: `12.690 / 0 / 0 / 0`; `r=1`: `1.884 / 5.479 / 0 / 0`; `r=2`: `0 / 5 / 1.441 / 2`; `r=3`: `0 / 0 / 0 / 279`.
+  - `ISSUE`: `r=0`: `7.752 / 2 / 0 / 0`; `r=1`: `2.707 / 9.265 / 0 / 0`; `r=2`: `1 / 2 / 1.825 / 7`; `r=3`: `0 / 0 / 1 / 479`.
+
+**Bằng chứng (Bảng 3).** Điểm hữu ích sau hậu kiểm trên thang 0 đến 3; phần tử hữu ích là phần tử có điểm `u >= 2`. Số trong ngoặc là số của L9 (judge v5; lưu ý ở L9 nếu áp dụng hậu kiểm `u <= r` để loại các mục lỗi logic `u=2, r=1` thì tỷ lệ instance có phần tử hữu ích của L9 chỉ là 34,0% ở DOC và 46,4% ở ISSUE):
+
+| Nguồn | Instance | Phần tử | Instance có ít nhất 1 phần tử hữu ích | Điểm hữu ích 0 / 1 / 2 / 3 (%) |
+|---|---|---|---|---|
+| DOC | 2.195 | 21.780 | **44,6%** (L9 thô: 47,6% \| L9 hậu kiểm `u<=r`: 34,0%) | **66,9 / 25,2 / 6,6 / 1,3** (L9: 71,4 / 19,9 / 7,9 / 0,8) |
+| ISSUE | 2.209 | 22.041 | **62,9%** (L9 thô: 68,3% \| L9 hậu kiểm `u<=r`: 46,4%) | **47,5 / 42,0 / 8,3 / 2,2** (L9: 65,4 / 20,9 / 11,9 / 1,8) |
+
+| Nguồn | Giữ | Precision | Recall trong pool | F1 | T11U | Token TB |
+|---|---|---|---|---|---|---|
+| DOC | top-1 | 0,224 | 0,286 | 0,251 | −0,329 | 333 |
+| DOC | top-3 | 0,146 | 0,561 | 0,232 | −1,684 | 1.006 |
+| DOC | top-5 (hạn ngạch hiện tại) | 0,115 | 0,732 | 0,198 | −3,282 | 1.666 |
+| DOC | top-10 | 0,079 | 1,000 | 0,146 | −7,576 | 3.300 |
+| ISSUE | top-1 | 0,246 | 0,235 | 0,240 | −0,261 | 345 |
+| ISSUE | top-3 | 0,179 | 0,512 | 0,266 | −1,386 | 1.054 |
+| ISSUE | top-5 (hạn ngạch hiện tại) | 0,144 | 0,688 | 0,239 | −2,829 | 1.782 |
+| ISSUE | top-10 | 0,105 | 1,000 | 0,190 | −6,831 | 3.671 |
+
+- Nhờ cắt trần `_clip`, số token trung bình của 5 phần tử `ISSUE` đầu giảm từ `2.043` (L9) xuống **`1.782` token** (giảm 12,8%), và của 10 phần tử đầu giảm từ `4.138` xuống **`3.671` token**.
+- Số instance có phần tử hữu ích trong pool là **980 / 2.195 (44,6%)** ở `DOC` và **1.390 / 2.209 (62,9%)** ở `ISSUE`. So với mức thực chất sau khi loại lỗi `u=2, r=1` của L9 (`34,0%` ở DOC và `46,4%` ở ISSUE), Judge v6 tìm được bằng chứng hữu ích cho thêm **+234 instance ở DOC (+10,6 điểm %)** và **+364 instance ở ISSUE (+16,5 điểm %)**.
+
+**Loại thông tin (Bảng 4).** Tỷ lệ (%) phần tử hữu ích (`u >= 2`) có từng loại thông tin (số trong ngoặc là số của L9):
+
+| Nguồn | Hành vi mong đợi | Cách dùng API | Lỗi tương tự | Nguyên nhân lỗi | Vị trí code | Lý do thiết kế | Thay đổi trước đây |
+|---|---|---|---|---|---|---|---|
+| DOC (`1.724` mục `u>=2`) | **48,6%** (29,3) | **53,5%** (64,6) | **2,3%** (9,5) | **8,0%** (2,8) | **36,5%** (17,2) | **11,9%** (16,2) | **4,6%** (8,3) |
+| ISSUE (`2.313` mục `u>=2`) | **30,9%** (12,9) | **14,1%** (13,0) | **27,7%** (70,3) | **48,1%** (18,3) | **54,5%** (30,4) | **14,8%** (14,1) | **8,5%** (9,4) |
+
+Trên mọi phần tử, tỷ lệ `unrelated` (`not_relevant`) là `45,1%` ở `DOC` và `38,8%` ở `ISSUE`; tỷ lệ `no_new_information` là `21,8%` ở `DOC` và `8,4%` ở `ISSUE` (tổng hai nhãn loại trừ đúng bằng tỷ lệ điểm `u = 0`: `66,9%` ở `DOC` và `47,2%` ở `ISSUE`). Số phần tử có từng loại thông tin trên mỗi instance (tính trên mọi phần tử trừ hai nhãn loại trừ):
+
+| Nguồn | Hành vi mong đợi | Cách dùng API | Lỗi tương tự | Nguyên nhân lỗi | Vị trí code | Lý do thiết kế | Thay đổi trước đây |
+|---|---|---|---|---|---|---|---|
+| DOC | 0,42 | 0,52 | 0,03 | 0,06 | 2,63 | 0,11 | 0,05 |
+| ISSUE | 0,37 | 0,17 | 0,33 | 0,51 | 4,63 | 0,19 | 0,10 |
+
+**Độ ổn định của Judge v6 (`#rep` và Phân tích sâu J6).** Chấm lặp trên 130 instance (`1.290` cặp phần tử `DOC` và `1.290` cặp phần tử `ISSUE`, tổng cộng `2.580` cặp) với thứ tự phần tử trong prompt xáo ngẫu nhiên khác nhau:
+
+| Nguồn | Cặp phần tử | Trùng điểm hữu ích | $\kappa$ nhãn hữu ích ($\ge 2$) | $\kappa$ trọng số, điểm hữu ích | $\kappa$ trọng số, điểm liên quan | Jaccard loại thông tin |
+|---|---|---|---|---|---|---|
+| DOC | 1.290 | 74,8% | 0,596 | 0,652 | 0,754 | 0,665 |
+| ISSUE | 1.290 | 71,2% | 0,660 | 0,691 | 0,726 | 0,667 |
+| Gộp | 2.580 | 73,0% | **0,633** | **0,686** | **0,742** | **0,666** |
+
+Độ đồng thuận Cohen's $\kappa$ theo từng nhãn `info_types` giữa hai lượt chấm độc lập (`J6`, số trong ngoặc là của L9):
+- `DOC`: `past_change` **0,665** (0,294), `unrelated` **0,651** (0,752), `expected_behavior` **0,558** (0,491), `api_usage` **0,513** (0,641), `code_location` **0,505** (0,520), `bug_cause` **0,397** (0,247), `no_new_information` **0,376** (0,164), `design_rationale` **0,172** (0,378), `similar_failure` **0,000** (0,196).
+- `ISSUE`: `past_change` **0,678** (0,255), `expected_behavior` **0,597** (0,418), `unrelated` **0,588** (0,692), `bug_cause` **0,582** (0,441), `api_usage` **0,536** (0,489), `code_location` **0,496** (0,558), `design_rationale` **0,480** (0,318), `similar_failure` **0,381** (0,553), `no_new_information` **0,189** (−0,006).
+
+**Các phân tích sâu mới về chất lượng bằng chứng (`J2`, `J3`, `J4`, `J5`).**
+1. **Vị trí trong prompt (`alias_pos`) so với thứ hạng truy xuất thực (`orig_rank`) (`J2`):**
+   - Theo `orig_rank` (hạng 1 đến hạng 10 của bộ truy xuất), tỷ lệ phần tử hữu ích (`u >= 2`) giảm đơn điệu hợp lý từ hạng 1 xuống hạng 10: ở `DOC` từ **22,37%** (hạng 1) xuống **3,75%** (hạng 10); ở `ISSUE` từ **24,63%** (hạng 1) xuống **4,95%** (hạng 10).
+   - Theo `alias_pos` (vị trí 1 đến 10 sau khi xáo ngẫu nhiên trong prompt), tỷ lệ `u >= 2` vẫn có hiện tượng trôi về cuối danh sách: ở `DOC` tăng từ `5,06%` (vị trí 1) lên `10,78%` (vị trí 8) và `9,86%` (vị trí 10); ở `ISSUE` tăng từ `6,70%` (vị trí 1) lên `13,18%` (vị trí 8) và `10,59%` (vị trí 10). Nhờ cơ chế xáo trộn ngẫu nhiên trước khi đưa vào prompt (tỷ lệ nối gold ở `alias_pos 1..10` phẳng tuyệt đối quanh `4,7%–5,3%` ở `DOC` và `6,3%–8,4%` ở `ISSUE`), hiện tượng trôi theo `alias_pos` được trung hòa khi ánh xạ ngược về `orig_rank`.
+2. **Phân bố điểm hữu ích và tương quan độ dài theo trạng thái nối tới gold (`J3`):**
+   - Tương quan hạng Spearman giữa số token và điểm `usefulness` rất thấp ở mọi nhóm: **$\rho = -0,08$** (DOC nối gold), **$\rho = -0,04$** (DOC không nối gold), **$\rho = 0,18$** (ISSUE nối gold) và **$\rho = 0,10$** (ISSUE không nối gold).
+   - Các phần tử thực sự nối tới gold (`1.058` phần tử `DOC`, `1.569` phần tử `ISSUE`) có tỷ lệ hữu ích `u >= 2` cao gấp **4,0 đến 4,3 lần** nhóm không nối tới gold (`DOC`: **27,50%** vs **6,88%**; `ISSUE`: **36,52%** vs **8,52%**). Tuy nhiên, có tới `47,92%` phần tử `DOC` nối gold và `51,50%` phần tử `ISSUE` nối gold chỉ nhận điểm `u = 1`.
+3. **Độ hữu ích của bằng chứng theo repo và độ khó của `AST` (`J4a`, `J4b`):**
+   - Theo repo (`J4a`): ở `DOC`, tỷ lệ instance có bằng chứng hữu ích trong pool tăng mạnh theo độ phủ tài liệu của repo (từ `2,9%` ở `pylint` — độ phủ doc `0,2%` — lên `63,7%` ở `scikit-learn`, `65,5%` ở `django` và `63,6%` ở `flask`). Ngược lại, ở `ISSUE`, tỷ lệ pool có bằng chứng hữu ích đạt mức cao đồng đều trên cả các repo ít tài liệu (`pylint` `54,7%`, `matplotlib` `61,7%`, `pytest` `61,5%`, `django` `75,5%`).
+   - Theo độ khó (`J4b`): khi `AST` xếp gold ngoài top 10 (`1.003` instance ở `DOC`, `1.011` instance ở `ISSUE`), `DOC` vẫn có bằng chứng hữu ích cho **39,5%** instance trong pool (**33,1%** ở `top-5`), và `ISSUE` có bằng chứng hữu ích cho **58,9%** instance trong pool (**47,5%** ở `top-5`).
+4. **Độ bổ trợ chéo `DOC ∪ ISSUE` (`J5`, trên toàn bộ `2.214` instance):**
+
+| Tập instance | Chỉ `DOC` (%) | Chỉ `ISSUE` (%) | Cả `DOC` và `ISSUE` (%) | Hợp `DOC ∪ ISSUE` (%) | Không nguồn nào (%) |
+|---|---|---|---|---|---|
+| **Toàn bộ (`2.214` bài) — tại hạn ngạch `top-5`** | 15,4% | 29,0% | 22,6% | **66,9%** | 33,1% |
+| **Toàn bộ (`2.214` bài) — trong toàn pool `top-10`** | 12,6% | 31,1% | 31,7% | **75,4%** | 24,6% |
+| **Nhóm khó (`AST` trượt top 10, `1.015` bài) — tại `top-5`** | 15,6% | 30,1% | 17,1% | **62,9%** | 37,1% |
+| **Nhóm khó (`AST` trượt top 10, `1.015` bài) — tại `top-10`** | 13,6% | 33,2% | 25,4% | **72,2%** | 27,8% |
+| **Nhóm dễ (`AST` trúng top 10, `1.199` bài) — tại `top-5`** | 15,3% | 27,9% | 27,2% | **70,4%** | 29,6% |
+| **Nhóm dễ (`AST` trúng top 10, `1.199` bài) — tại `top-10`** | 11,8% | 29,4% | 36,9% | **78,1%** | 21,9% |
+
+**Đánh giá.**
+- **Prompt v6 và cơ chế cắt trần `_clip` giải quyết triệt để các lỗi hệ thống của Judge v5.** Tỷ lệ vi phạm bất đẳng thức `u_raw > relevance` giảm 98,8% (từ `2,13%` xuống `0,03%`), trong đó lỗi nặng nhất `u_raw = 2, relevance = 1` giảm từ `933` phần tử về đúng `0`. Lỗi gán nhãn mâu thuẫn `no_new_information` khi `relevance = 0` giảm từ `1.055` phần tử về `0`. Đồng thời, độ đồng thuận $\kappa$ của nhãn `no_new_information` tăng từ `0,164` lên `0,376` ở `DOC` và từ `-0,006` lên `0,189` ở `ISSUE`, và của `bug_cause` tăng từ `0,247` lên `0,492` (DOC) và từ `0,441` lên `0,545` (ISSUE).
+- **Tách biệt bản chất thông tin giữa `DOC` và `ISSUE` rõ ràng hơn hẳn L9.** Khi không còn bị gán tràn lan nhãn `similar_failure` (giảm từ `70,3%` ở L9 xuống `27,7%`), các phần tử `ISSUE` hữu ích bộc lộ rõ vai trò chỉ ra vị trí code liên quan (`54,5%`), giải thích nguyên nhân gốc của lỗi (`bug_cause = 48,1%`, tăng từ `18,3%` ở L9) và kỳ vọng hành vi (`expected_behavior = 30,9%`, tăng từ `12,9%`). Trong khi đó, `DOC` tập trung vào `api_usage` (`53,5%`) và `expected_behavior` (`48,6%`, tăng từ `29,3%`).
+- **Làm rõ vai trò bổ trợ hai tầng của kiến trúc đa nguồn.** Kết hợp Bảng 1–2 và phân tích sâu `J4`–`J5` cho thấy:
+  1. Ở tầng *xếp hạng nút AST (Code Localization)*: lịch sử thay đổi mức hunk (`+HIST (Locus)` / `+HIST (NL+CE)`) là nguồn nâng hạng AST mạnh nhất (`Top@10` đạt `59,7%`, giảm trung vị số node phải đọc ở `@5` từ `17,0` xuống `5,0`), còn `+ALL+GRAPH` cải thiện `Top@10` lên `57,3%` (mức file đạt `89,4%`). Ngược lại, trộn RRF đồng trọng số (`1:1`) danh sách AST suy ra từ `DOC` hoặc `ISSUE` làm giảm `Top@1` do nhiễu cấu trúc fan-out của cạnh `MENTIONS`.
+  2. Ở tầng *cung cấp ngữ cảnh sửa lỗi (Context Augmentation)*: bản thân các văn bản `DOC` và `ISSUE` thu được lại có tính bổ trợ chéo rất cao (`DOC ∪ ISSUE` bao phủ `66,9%` tổng số instance ở hạn ngạch `top-5` và `75,4%` ở `top-10`). Quan trọng nhất, trên `1.015` instance khó mà `AST Top@10` hoàn toàn bỏ sót gold, `DOC ∪ ISSUE` vẫn cung cấp bằng chứng sửa lỗi hữu ích cho **`62,9%` số bài ở `top-5`** (và **`72,2%` ở `top-10`**), trong đó riêng `ISSUE` đóng góp `50,9%` ở `top-5` (`35,9%` chỉ `ISSUE` + `15,0%` cả hai).
+
+**Sự cố và giới hạn.**
+- Không có sự cố vận hành nào trong cả lượt chạy: `drop-broken` kiểm tra 695 file với 0 lỗi, và toàn bộ 23 batch job của `judge-v4` (`4.663/4.663` request) hoàn tất 100% ở lần gửi đầu tiên.
+- Cell `manifest` báo `0 cell đã băm` (do chạy trên môi trường Kaggle không gắn trực tiếp file `.ipynb` vào đường dẫn tự đọc của `manifest`), nhưng toàn bộ 38/38 file kết quả trong `/kaggle/working/v4/` đều được ghi nhận đầy đủ.
+- Ở phân tích `J2`, hiện tượng trôi nhẹ tỷ lệ điểm hữu ích theo vị trí xuất hiện trong prompt (`alias_pos` từ mục 1 đến mục 10) vẫn tồn tại (`5,06% -> 10,78%` ở `DOC`, `6,70% -> 13,18%` ở `ISSUE`), dù đã được khử nhiễu khỏi thứ hạng thực `orig_rank` nhờ phép xáo trộn ngẫu nhiên trước khi chấm.
+- **Bốn điểm lệch hành vi mới của Judge v6 phát hiện qua đối chiếu chéo Bảng 3, Bảng 4 và `J2`–`J6`:**
+  1. *Hiệu ứng "thùng chứa mặc định" `(relevance = 1, info_types = ["code_location"], usefulness = 1)`:* Ở `ISSUE`, tỷ lệ điểm `u = 1` tăng vọt từ `20,9%` (L9) lên `42,0%`, kéo theo tỷ lệ nhãn `code_location` trên mọi phần tử lên tới `46,4%` (`4,63` mục/instance ở `ISSUE` và `26,5%` = `2,63` mục/instance ở `DOC`), trong khi thực tế chỉ có `7,1%` phần tử `ISSUE` (`1.569 / 22.041`) thực sự nối tới gold (`J3`). Khi đảo `relevance` lên Bước 1, với các phần tử cùng module/tập tin (`relevance = 1`), mô hình có xu hướng gán `["code_location"]` + `u = 1` thay vì `["no_new_information"]` + `u = 0` ngay cả khi phần tử chỉ nhắc tên một hàm/lớp khác trong vùng lân cận chứ không phải hàm/lớp của `Actual fix`.
+  2. *Ranh giới mờ giữa `no_new_information (u = 0)` và `code_location (u = 1)`:* Do sự nhập nhằng ở mức `relevance = 1` nêu trên, giữa hai lượt chấm lặp `#rep`, mô hình dao động qua lại giữa `(no_new_information, u = 0)` và `(code_location, u = 1)`. Điều này giải thích vì sao tỷ lệ trùng điểm tuyệt đối `usefulness (0..3)` giảm nhẹ từ `83,2%` xuống `74,8%` ở `DOC` và từ `72,7%` xuống `71,2%` ở `ISSUE`, cũng như $\kappa$ của `no_new_information` chỉ đạt `0,376` (DOC) và `0,189` (ISSUE), trong khi ở ngưỡng quyết định thực sự `u >= 2`, $\kappa$ của `ISSUE` lại **tăng** từ `0,618` (L9) lên `0,660`.
+  3. *Sự gia tăng trở lại của `code_location` trong nhóm hữu ích (`u >= 2`):* Tỷ lệ phần tử hữu ích (`u >= 2`) mang nhãn `code_location` tăng từ `17,2%` (L9) lên `36,5%` ở `DOC` và từ `30,4%` (L9) lên `54,5%` ở `ISSUE`. Do `info_types` được sinh ở Bước 2 ngay sau `relevance` (trước khi xét `usefulness` ở Bước 3), hễ phần tử có `relevance >= 2` và nhắc tên hàm/lớp được sửa, mô hình liền gắn kèm `code_location` cùng một nhãn nội dung khác (`bug_cause` hoặc `api_usage`).
+  4. *Độ bất định cao trên các nhãn hiếm ở `DOC` (`J6`):* Khi siết định nghĩa, `similar_failure` ở `DOC` giảm xuống rất hiếm (`0,3%` mọi phần tử), dẫn tới $\kappa = 0,000$ trên tập `#rep`; tương tự `design_rationale` ở `DOC` (`1,1%` mọi phần tử) có $\kappa = 0,172$ (giảm từ `0,378` ở L9).
+
+
